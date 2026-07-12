@@ -2,7 +2,7 @@
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 
-function useCountUp(ref: React.RefObject<HTMLDivElement>, target: number, prefix = "", duration = 1600) {
+function useCountUp(ref: React.RefObject<HTMLDivElement | null>, target: number, prefix = "", duration = 1600) {
   useEffect(() => {
     if (!ref.current) return;
     const start = performance.now();
