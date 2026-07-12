@@ -18,7 +18,7 @@ interface StatCardProps {
 
 function useCountUp(target: number, duration = 1200, delay = 0) {
   const [current, setCurrent] = useState(0);
-  const rafRef = useRef<number>();
+  const rafRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     const timeout = setTimeout(() => {

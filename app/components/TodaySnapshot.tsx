@@ -12,7 +12,7 @@ const IVA = 1.22;
 
 function useCountUp(target: number, duration = 900, delay = 0) {
   const [current, setCurrent] = useState(0);
-  const raf = useRef<number>();
+  const raf = useRef<number | undefined>(undefined);
   useEffect(() => {
     setCurrent(0);
     const t = setTimeout(() => {
