@@ -1,0 +1,15 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root, [data-theme="light"] {
+  --bg: #F4F4F6; --bg2: #FFFFFF; --card: #FFFFFF; --card2: #F8F8FA;
+  --border: #E8E8ED; --muted: #C8C8D0; --text: #111118; --sub: #888899;
+  --accent: #EA580C; --accent2: #C2410C; --accent-bg: rgba(234,88,12,0.08);
+  --red: #DC2626; --red-bg: rgba(220,38,38,0.08);
+  --green: #16A34A; --green-bg: rgba(22,163,74,0.08);
+  --shadow: 0 1px 4px rgba(0,0,0,0.06); --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; -webkit-font-smoothing: antialiased; }

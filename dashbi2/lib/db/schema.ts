@@ -1,0 +1,63 @@
+import { pgTable, text, uuid, timestamp, integer, numeric, boolean, uniqueIndex } from "drizzle-orm/pg-core";
+
+export const tenants = pgTable("tenants", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  clerkUserId: text("clerk_user_id").notNull().unique(),
+  nombre: text("nombre"),
+  email: text("email"),
+  mlUserId: text("ml_user_id"),
+  mlSiteId: text("ml_site_id").default("MLU"),
+  status: text("status").default("trial"), // trial | active | inactive
+  trialEndsAt: timestamp("trial_ends_at", { withTimezone: true }).defaultNow(),
+  subscriptionEndsAt: timestamp("subscription_ends_at", { withTimezone: true }),
+  plan: text("plan").default("pro"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
+export const mlTokens = pgTable("ml_tokens", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull().unique(),
+  accessToken: text("access_token").notNull(),
+  refreshToken: text("refresh_token").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
+export const ordenes = pgTable("ordenes", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
+  orderId: text("order_id").notNull(),
+  fecha: timestamp("fecha", { withTimezone: true }),
+  producto: text("producto"),
+  sku: text("sku"),
+  itemIdMl: text("item_id_ml"),
+  cantidad: integer("cantidad").default(1),
+  precioUnitario: numeric("precio_unitario"),
+  totalItem: numeric("total_item"),
+  comisionMl: numeric("comision_ml").default("0"),
+  shippingCostSeller: numeric("shipping_cost_seller").default("0"),
+  bonificacionEnvio: numeric("bonificacion_envio").default("0"),
+  tipoEnvio: text("tipo_envio"),
+  shipmentId: text("shipment_id"),
+  estado: text("estado"),
+  estadoEnvio: text("estado_envio"),
+  buyer: text("buyer"),
+}, (table) => ({
+  tenantOrderUnique: uniqueIndex("tenant_order_unique").on(table.tenantId, table.orderId),
+}));
+
+export const publicaciones = pgTable("publicaciones", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
+  itemId: text("item_id").notNull(),
+  sku: text("sku"),
+  title: text("title"),
+  thumbnail: text("thumbnail"),
+  price: numeric("price"),
+  availableQuantity: integer("available_quantity"),
+  status: text("status"),
+  soldQuantity: integer("sold_quantity"),
+}, (table) => ({
+  tenantItemUnique: uniqueIndex("tenant_item_unique").on(table.tenantId, table.itemId),
+}));
