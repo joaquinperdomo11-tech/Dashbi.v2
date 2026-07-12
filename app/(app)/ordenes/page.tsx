@@ -82,14 +82,14 @@ export default function OrdenesPage() {
   const rentPct = totalRev > 0 ? (totalRent / totalRev * 100) : 0;
 
   if (loading) return (
-    <div style={{minHeight:"100vh",background:"var(--bg)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+    <div style={{display:"flex",alignItems:"center",justifyContent:"center",padding:60}}>
       <div style={{width:28,height:28,border:"3px solid var(--border)",borderTopColor:"var(--accent)",borderRadius:"50%",animation:"spin 0.8s linear infinite"}} />
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
   );
 
   return (
-    <div style={{minHeight:"100vh",background:"var(--bg)",padding:"24px"}}>
+    <div style={{padding:"24px"}}>
       <div style={{maxWidth:1200,margin:"0 auto",display:"flex",flexDirection:"column",gap:16}}>
         <div>
           <h1 style={{fontFamily:"'DM Serif Display',serif",fontSize:26,color:"var(--text)"}}>Órdenes</h1>

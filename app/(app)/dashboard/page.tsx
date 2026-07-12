@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState, useCallback, useMemo } from "react";
-import { useUser, UserButton } from "@clerk/nextjs";
+import { useUser } from "@clerk/nextjs";
 import { useRouter } from "next/navigation";
 import type { DashboardData } from "@/lib/sheets";
 import StatCard from "@/app/components/StatCard";
@@ -127,61 +127,7 @@ export default function DashboardPage() {
   );
 
   return (
-    <div style={{display:"flex", minHeight:"100vh", width:"100%", background:"var(--bg)"}}>
-      {/* Sidebar desktop */}
-      <aside className="hidden md:flex flex-col flex-shrink-0 border-r"
-        style={{width:220, borderColor:"var(--border)", background:"var(--card)", minHeight:"100vh", position:"sticky", top:0, height:"100vh"}}>
-        <div style={{padding:"20px 20px", borderBottom:"1px solid var(--border)"}}>
-          <div style={{display:"flex",alignItems:"center",gap:12}}>
-            <div style={{width:36,height:36,background:"var(--accent)",borderRadius:12,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>📦</div>
-            <div>
-              <h1 style={{fontFamily:"'DM Serif Display',serif",fontWeight:700,fontSize:16,color:"var(--text)",lineHeight:1}}>Dashbi</h1>
-              <p style={{fontSize:10,color:"var(--sub)",marginTop:3,fontFamily:"'DM Mono',monospace"}}>{tenant?.nombre}</p>
-            </div>
-          </div>
-        </div>
-
-        <nav style={{flex:1, padding:"16px 12px"}}>
-          <p style={{fontSize:9,fontFamily:"'DM Mono',monospace",textTransform:"uppercase",letterSpacing:"0.1em",padding:"0 12px 8px",color:"var(--muted)"}}>Menú principal</p>
-          <button
-            style={{width:"100%",display:"flex",alignItems:"center",gap:12,padding:"10px 12px",borderRadius:12,fontSize:14,background:"var(--text)",color:"var(--bg2)",border:"none",cursor:"pointer",fontWeight:600,marginBottom:4}}>
-            <span style={{fontSize:16,width:20,textAlign:"center"}}>📊</span>
-            <span>Resumen</span>
-          </button>
-          <button onClick={() => router.push("/ordenes")}
-            style={{width:"100%",display:"flex",alignItems:"center",gap:12,padding:"10px 12px",borderRadius:12,fontSize:14,background:"transparent",color:"var(--sub)",border:"none",cursor:"pointer",marginBottom:4}}>
-            <span style={{fontSize:16,width:20,textAlign:"center"}}>📋</span>
-            <span>Órdenes</span>
-          </button>
-          <p style={{fontSize:9,fontFamily:"'DM Mono',monospace",textTransform:"uppercase",letterSpacing:"0.1em",padding:"12px 12px 8px",color:"var(--muted)"}}>Finanzas</p>
-          <button onClick={() => router.push("/costos")}
-            style={{width:"100%",display:"flex",alignItems:"center",gap:12,padding:"10px 12px",borderRadius:12,fontSize:14,background:"transparent",color:"var(--sub)",border:"none",cursor:"pointer"}}>
-            <span style={{fontSize:16,width:20,textAlign:"center"}}>💲</span>
-            <span>Costos</span>
-          </button>
-        </nav>
-
-        <div style={{padding:"16px", borderTop:"1px solid var(--border)"}}>
-          {lastUpdated && (
-            <p style={{fontSize:10,color:"var(--sub)",fontFamily:"'DM Mono',monospace",marginBottom:10}}>
-              Actualizado {lastUpdated.toLocaleTimeString("es-UY",{hour:"2-digit",minute:"2-digit",timeZone:"America/Montevideo"})}
-            </p>
-          )}
-          <UserButton />
-        </div>
-      </aside>
-
-      {/* Mobile header */}
-      <header className="md:hidden" style={{position:"fixed",top:0,left:0,right:0,zIndex:50,background:"var(--card)",borderBottom:"1px solid var(--border)",padding:"12px 16px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-        <div style={{display:"flex",alignItems:"center",gap:10}}>
-          <div style={{width:30,height:30,background:"var(--accent)",borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",fontSize:15}}>📦</div>
-          <p style={{fontFamily:"'DM Serif Display',serif",fontWeight:700,fontSize:15,color:"var(--text)"}}>Dashbi</p>
-        </div>
-        <UserButton />
-      </header>
-
-      {/* Main content */}
-      <main style={{flex:1, minWidth:0, padding:"24px", paddingTop:"80px"}} className="md:pt-6">
+    <div style={{padding:"24px"}}>
         {!tenant?.mlUserId ? (
           <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:20,padding:48,textAlign:"center",maxWidth:600,margin:"40px auto"}}>
             <div style={{fontSize:48,marginBottom:16}}>🔗</div>
@@ -277,7 +223,6 @@ export default function DashboardPage() {
             </section>
           </div>
         )}
-      </main>
     </div>
   );
 }
