@@ -62,3 +62,13 @@ export const publicaciones = pgTable("publicaciones", {
 }, (table) => ({
   tenantItemUnique: uniqueIndex("tenant_item_unique").on(table.tenantId, table.itemId),
 }));
+
+export const costos = pgTable("costos", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
+  sku: text("sku").notNull(),
+  costoSinIva: numeric("costo_sin_iva").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  tenantSkuUnique: uniqueIndex("tenant_sku_unique").on(table.tenantId, table.sku),
+}));
