@@ -11,6 +11,7 @@ export const tenants = pgTable("tenants", {
   trialEndsAt: timestamp("trial_ends_at", { withTimezone: true }).defaultNow(),
   subscriptionEndsAt: timestamp("subscription_ends_at", { withTimezone: true }),
   plan: text("plan").default("pro"),
+  initialSyncDone: boolean("initial_sync_done").default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 });
