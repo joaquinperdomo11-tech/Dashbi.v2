@@ -26,16 +26,20 @@ export default function OnboardingPage() {
   const syncStarted = useRef(false);
 
   useEffect(() => {
+    console.log("[onboarding] effect fired", { isLoaded, isSignedIn });
     if (!isLoaded) return;
     if (!isSignedIn) { router.push("/sign-in"); return; }
 
     const load = async () => {
+      console.log("[onboarding] fetching tenant...");
       const res = await fetch("/api/tenant");
       const { tenant: t } = await res.json();
+      console.log("[onboarding] tenant loaded", t);
 
       if (t.mlUserId && !t.initialSyncDone) {
-        if (syncStarted.current) return;
+        if (syncStarted.current) { console.log("[onboarding] sync already started, skipping"); return; }
         syncStarted.current = true;
+        console.log("[onboarding] starting sync loop");
         setTenant(t);
         setSyncing(true);
         startTime.current = Date.now();
