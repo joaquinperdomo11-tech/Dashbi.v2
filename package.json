@@ -17,6 +17,7 @@
     "@clerk/nextjs": "^6.9.6",
     "@neondatabase/serverless": "^0.10.4",
     "drizzle-orm": "^0.36.4",
+    "recharts": "^2.13.3",
     "clsx": "^2.1.1"
   },
   "devDependencies": {

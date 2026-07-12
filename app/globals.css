@@ -13,3 +13,42 @@
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; -webkit-font-smoothing: antialiased; }
+
+/* Brand utility classes (used by ported components) */
+.bg-brand-card   { background-color: var(--card) !important; }
+.bg-brand-card2  { background-color: var(--card2) !important; }
+.bg-brand-dark   { background-color: var(--bg) !important; }
+.border-brand-border { border-color: var(--border) !important; }
+.text-brand-text { color: var(--text) !important; }
+.text-brand-sub  { color: var(--sub) !important; }
+.text-brand-muted { color: var(--muted) !important; }
+.text-brand-yellow { color: var(--accent) !important; }
+.bg-brand-yellow { background-color: var(--accent) !important; }
+.font-display { font-family: 'DM Serif Display', serif; }
+.font-body { font-family: 'DM Sans', sans-serif; }
+.font-mono { font-family: 'DM Mono', monospace; }
+
+/* Skeleton loading */
+.skeleton {
+  background: linear-gradient(90deg, var(--card) 25%, var(--card2) 50%, var(--card) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 12px;
+}
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Recharts tooltip */
+.recharts-tooltip-wrapper .recharts-default-tooltip {
+  background: var(--card) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 12px !important;
+  font-family: 'DM Sans', sans-serif !important;
+  box-shadow: var(--shadow-md) !important;
+}
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 2px; }

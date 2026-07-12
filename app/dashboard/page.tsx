@@ -1,28 +1,31 @@
 "use client";
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { useUser, UserButton } from "@clerk/nextjs";
 import { useRouter } from "next/navigation";
+import type { DashboardData } from "@/lib/sheets";
+import StatCard from "@/app/components/StatCard";
+import RevenueChart from "@/app/components/RevenueChart";
+import MonthlyChart from "@/app/components/MonthlyChart";
+import WaterfallChart from "@/app/components/WaterfallChart";
+import TodaySnapshot from "@/app/components/TodaySnapshot";
+import TopProductosResumen from "@/app/components/TopProductosResumen";
 
-interface Order {
-  orderId: string; fecha: string; producto: string; sku: string;
-  cantidad: number; totalItem: number; estado: string;
-}
-
-function fmt(n: number) { return "$" + Math.round(n).toLocaleString("es-UY"); }
-
-function getDayKey(fecha: string) {
-  return new Date(fecha).toLocaleDateString("es-UY", { timeZone: "America/Montevideo", year: "numeric", month: "2-digit", day: "2-digit" });
+function Skeleton({ className }: { className: string }) {
+  return <div className={`skeleton ${className}`} />;
 }
 
 export default function DashboardPage() {
   const { isLoaded, isSignedIn } = useUser();
   const router = useRouter();
-  const [tenant, setTenant]   = useState<any>(null);
-  const [orders, setOrders]   = useState<Order[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadingOrders, setLoadingOrders] = useState(false);
-  const [enriching, setEnriching] = useState(false);
 
+  const [tenant, setTenant]       = useState<any>(null);
+  const [data, setData]           = useState<DashboardData | null>(null);
+  const [tenantLoading, setTenantLoading] = useState(true);
+  const [dataLoading, setDataLoading]     = useState(false);
+  const [enriching, setEnriching] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
+  // Load tenant + kick off connect flow if needed
   useEffect(() => {
     if (!isLoaded) return;
     if (!isSignedIn) { router.push("/sign-in"); return; }
@@ -31,65 +34,92 @@ export default function DashboardPage() {
       const res = await fetch("/api/tenant");
       const { tenant: t } = await res.json();
       setTenant(t);
-      setLoading(false);
-
-      if (t.mlUserId) {
-        setLoadingOrders(true);
-        const oRes = await fetch("/api/data/orders");
-        const data = await oRes.json();
-        setOrders(data.orders || []);
-        setLoadingOrders(false);
-
-        // Check if shipment enrichment is still pending
-        const statusRes = await fetch("/api/sync/status");
-        const status = await statusRes.json();
-        if (status.pending > 0) {
-          setEnriching(true);
-          continueEnrichment();
-        }
-      }
+      setTenantLoading(false);
     };
     load();
   }, [isLoaded, isSignedIn, router]);
 
-  const continueEnrichment = async (attempt = 0) => {
-    if (attempt > 100) { setEnriching(false); return; } // safety cap ~80s
+  const fetchDashboardData = useCallback(async () => {
+    setDataLoading(true);
     try {
-      const res = await fetch("/api/sync/enrich-shipments", { method: "POST" });
-      const data = await res.json();
-      if (!data.done) {
-        setTimeout(() => continueEnrichment(attempt + 1), 800);
-      } else {
-        setEnriching(false);
-        // Refresh orders to show updated shipment data
-        const oRes = await fetch("/api/data/orders");
-        const oData = await oRes.json();
-        setOrders(oData.orders || []);
-      }
-    } catch {
-      setEnriching(false);
+      const res = await fetch("/api/data/dashboard");
+      if (!res.ok) throw new Error("fetch failed");
+      const json = await res.json();
+      setData(json);
+      setLastUpdated(new Date());
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setDataLoading(false);
     }
-  };
+  }, []);
 
-  const ventasPorDia = useMemo(() => {
-    const map: Record<string, { fecha: string; ingresos: number; ordenes: number }> = {};
-    orders.forEach(o => {
-      const key = getDayKey(o.fecha);
-      if (!map[key]) map[key] = { fecha: key, ingresos: 0, ordenes: 0 };
-      map[key].ingresos += Number(o.totalItem);
-      map[key].ordenes  += 1;
-    });
-    return Object.values(map).sort((a, b) => a.fecha.localeCompare(b.fecha));
-  }, [orders]);
+  // Load dashboard data once ML is connected, then poll every 5 min
+  useEffect(() => {
+    if (!tenant?.mlUserId) return;
+    fetchDashboardData();
+    const interval = setInterval(fetchDashboardData, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [tenant?.mlUserId, fetchDashboardData]);
 
-  const totalIngresos = orders.reduce((s, o) => s + Number(o.totalItem), 0);
-  const totalOrdenes  = orders.length;
-  const totalUnidades = orders.reduce((s, o) => s + o.cantidad, 0);
-  const ticketProm    = totalOrdenes > 0 ? totalIngresos / totalOrdenes : 0;
-  const maxIngresos   = Math.max(...ventasPorDia.map(d => d.ingresos), 1);
-  const daysLeft = tenant ? Math.max(0, Math.ceil((new Date(tenant.trialEndsAt).getTime() - Date.now()) / 86400000)) : 0;
+  // Poll shipment enrichment status while pending
+  useEffect(() => {
+    if (!tenant?.mlUserId) return;
+    let cancelled = false;
 
-  if (loading) return (
+    const checkStatus = async () => {
+      const res = await fetch("/api/sync/status");
+      const status = await res.json();
+      if (cancelled) return;
+      if (status.pending > 0) {
+        setEnriching(true);
+        continueEnrichment(0);
+      }
+    };
+
+    const continueEnrichment = async (attempt: number) => {
+      if (cancelled || attempt > 100) { setEnriching(false); return; }
+      try {
+        const res = await fetch("/api/sync/enrich-shipments", { method: "POST" });
+        const d = await res.json();
+        if (!d.done) {
+          setTimeout(() => continueEnrichment(attempt + 1), 800);
+        } else {
+          setEnriching(false);
+          fetchDashboardData();
+        }
+      } catch {
+        setEnriching(false);
+      }
+    };
+
+    checkStatus();
+    return () => { cancelled = true; };
+  }, [tenant?.mlUserId, fetchDashboardData]);
+
+  const { currentMonth, prevMonth } = data || {};
+
+  const valorStock = useMemo(() => {
+    const publicaciones = data?.publicaciones || [];
+    const costos = data?.costos || {};
+    return publicaciones
+      .filter(p => p.status === "active" || p.status === "paused")
+      .reduce((sum, p) => {
+        const costo = costos[p.sku || ""] || 0;
+        return sum + costo * 1.22 * p.available_quantity;
+      }, 0);
+  }, [data?.publicaciones, data?.costos]);
+
+  function pct(cur?: number, prev?: number) {
+    if (!prev || prev === 0) return undefined;
+    return (((cur || 0) - prev) / prev) * 100;
+  }
+
+  const daysLeft = tenant?.trialEndsAt
+    ? Math.max(0, Math.ceil((new Date(tenant.trialEndsAt).getTime() - Date.now()) / 86400000))
+    : 0;
+
+  if (tenantLoading) return (
     <div style={{minHeight:"100vh",background:"var(--bg)",display:"flex",alignItems:"center",justifyContent:"center"}}>
       <div style={{width:28,height:28,border:"3px solid var(--border)",borderTopColor:"var(--accent)",borderRadius:"50%",animation:"spin 0.8s linear infinite"}} />
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
@@ -97,28 +127,52 @@ export default function DashboardPage() {
   );
 
   return (
-    <div style={{minHeight:"100vh",background:"var(--bg)"}}>
-      <div style={{background:"var(--card)",borderBottom:"1px solid var(--border)",padding:"16px 32px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-        <div style={{display:"flex",alignItems:"center",gap:12}}>
-          <div style={{width:36,height:36,background:"var(--accent)",borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>📦</div>
-          <div>
-            <p style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:"var(--text)",lineHeight:1}}>Dashbi</p>
-            <p style={{fontSize:11,color:"var(--sub)",marginTop:2}}>{tenant?.nombre}</p>
+    <div style={{display:"flex", minHeight:"100vh", width:"100%", background:"var(--bg)"}}>
+      {/* Sidebar desktop */}
+      <aside className="hidden md:flex flex-col flex-shrink-0 border-r"
+        style={{width:220, borderColor:"var(--border)", background:"var(--card)", minHeight:"100vh", position:"sticky", top:0, height:"100vh"}}>
+        <div style={{padding:"20px 20px", borderBottom:"1px solid var(--border)"}}>
+          <div style={{display:"flex",alignItems:"center",gap:12}}>
+            <div style={{width:36,height:36,background:"var(--accent)",borderRadius:12,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>📦</div>
+            <div>
+              <h1 style={{fontFamily:"'DM Serif Display',serif",fontWeight:700,fontSize:16,color:"var(--text)",lineHeight:1}}>Dashbi</h1>
+              <p style={{fontSize:10,color:"var(--sub)",marginTop:3,fontFamily:"'DM Mono',monospace"}}>{tenant?.nombre}</p>
+            </div>
           </div>
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:12}}>
-          {daysLeft > 0 && tenant?.status === "trial" && (
-            <span style={{background:"var(--accent-bg)",color:"var(--accent)",fontSize:12,padding:"4px 12px",borderRadius:100,fontWeight:500}}>
-              ⏳ {daysLeft} días de prueba
-            </span>
+
+        <nav style={{flex:1, padding:"16px 12px"}}>
+          <p style={{fontSize:9,fontFamily:"'DM Mono',monospace",textTransform:"uppercase",letterSpacing:"0.1em",padding:"0 12px 8px",color:"var(--muted)"}}>Menú principal</p>
+          <button
+            style={{width:"100%",display:"flex",alignItems:"center",gap:12,padding:"10px 12px",borderRadius:12,fontSize:14,background:"var(--text)",color:"var(--bg2)",border:"none",cursor:"pointer",fontWeight:600}}>
+            <span style={{fontSize:16,width:20,textAlign:"center"}}>📊</span>
+            <span>Resumen</span>
+          </button>
+        </nav>
+
+        <div style={{padding:"16px", borderTop:"1px solid var(--border)"}}>
+          {lastUpdated && (
+            <p style={{fontSize:10,color:"var(--sub)",fontFamily:"'DM Mono',monospace",marginBottom:10}}>
+              Actualizado {lastUpdated.toLocaleTimeString("es-UY",{hour:"2-digit",minute:"2-digit",timeZone:"America/Montevideo"})}
+            </p>
           )}
           <UserButton />
         </div>
-      </div>
+      </aside>
 
-      <div style={{padding:32,maxWidth:1100,margin:"0 auto",display:"flex",flexDirection:"column",gap:24}}>
+      {/* Mobile header */}
+      <header className="md:hidden" style={{position:"fixed",top:0,left:0,right:0,zIndex:50,background:"var(--card)",borderBottom:"1px solid var(--border)",padding:"12px 16px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{width:30,height:30,background:"var(--accent)",borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",fontSize:15}}>📦</div>
+          <p style={{fontFamily:"'DM Serif Display',serif",fontWeight:700,fontSize:15,color:"var(--text)"}}>Dashbi</p>
+        </div>
+        <UserButton />
+      </header>
+
+      {/* Main content */}
+      <main style={{flex:1, minWidth:0, padding:"24px", paddingTop:"80px"}} className="md:pt-6">
         {!tenant?.mlUserId ? (
-          <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:20,padding:48,textAlign:"center"}}>
+          <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:20,padding:48,textAlign:"center",maxWidth:600,margin:"40px auto"}}>
             <div style={{fontSize:48,marginBottom:16}}>🔗</div>
             <h2 style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:"var(--text)",marginBottom:8}}>Conectá tu MercadoLibre</h2>
             <button onClick={() => router.push("/onboarding")}
@@ -127,7 +181,15 @@ export default function DashboardPage() {
             </button>
           </div>
         ) : (
-          <>
+          <div style={{maxWidth:1200, margin:"0 auto", display:"flex", flexDirection:"column", gap:24}}>
+            {daysLeft > 0 && tenant?.status === "trial" && (
+              <div style={{display:"flex",justifyContent:"flex-end"}}>
+                <span style={{background:"var(--accent-bg)",color:"var(--accent)",fontSize:12,padding:"5px 14px",borderRadius:100,fontWeight:500}}>
+                  ⏳ {daysLeft} días de prueba
+                </span>
+              </div>
+            )}
+
             {enriching && (
               <div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 16px",background:"var(--accent-bg)",borderRadius:12,border:"1px solid var(--accent)"}}>
                 <div style={{width:16,height:16,border:"2px solid var(--accent)",borderTopColor:"transparent",borderRadius:"50%",animation:"spin 0.8s linear infinite",flexShrink:0}} />
@@ -137,41 +199,74 @@ export default function DashboardPage() {
                 <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
               </div>
             )}
-            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:16}}>
-              {[
-                {label:"Ingresos", val: loadingOrders ? "..." : fmt(totalIngresos), icon:"💰", accent:true},
-                {label:"Órdenes",  val: loadingOrders ? "..." : String(totalOrdenes),  icon:"🛒"},
-                {label:"Unidades", val: loadingOrders ? "..." : String(totalUnidades), icon:"📦"},
-                {label:"Ticket promedio", val: loadingOrders ? "..." : fmt(ticketProm), icon:"🎯"},
-              ].map(card => (
-                <div key={card.label} style={{background:"var(--card)",border:`1px solid ${card.accent?"var(--accent)":"var(--border)"}`,borderRadius:16,padding:20,boxShadow:"var(--shadow)"}}>
-                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
-                    <p style={{fontSize:11,color:"var(--sub)",textTransform:"uppercase",letterSpacing:"0.06em",fontWeight:500}}>{card.label}</p>
-                    <span style={{fontSize:20}}>{card.icon}</span>
-                  </div>
-                  <p style={{fontSize:28,fontWeight:700,color: card.accent?"var(--accent)":"var(--text)"}}>{card.val}</p>
-                </div>
-              ))}
-            </div>
 
-            <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:20,padding:24,boxShadow:"var(--shadow)"}}>
-              <h3 style={{fontFamily:"'DM Serif Display',serif",fontSize:18,color:"var(--text)",marginBottom:20}}>Ingresos por día — últimos 30 días</h3>
-              {loadingOrders ? (
-                <div style={{height:160,display:"flex",alignItems:"center",justifyContent:"center",color:"var(--sub)"}}>Cargando datos...</div>
-              ) : ventasPorDia.length === 0 ? (
-                <div style={{height:160,display:"flex",alignItems:"center",justifyContent:"center",color:"var(--sub)"}}>Sin ventas recientes</div>
-              ) : (
-                <div style={{display:"flex",alignItems:"flex-end",gap:4,height:160}}>
-                  {ventasPorDia.map((d, i) => {
-                    const h = Math.max(4, (d.ingresos / maxIngresos) * 130);
-                    return <div key={i} title={`${d.fecha}: ${fmt(d.ingresos)}`} style={{flex:1,background:"var(--accent)",borderRadius:"4px 4px 0 0",height:h,opacity:0.85}} />;
-                  })}
-                </div>
+            {/* Hoy */}
+            {data && <TodaySnapshot orders={data.orders} costos={data.costos} />}
+            {!data && dataLoading && <Skeleton className="h-40 rounded-2xl" />}
+
+            <div style={{borderTop:"1px solid var(--border)"}} />
+
+            {/* KPIs mes actual */}
+            <section>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+                <p style={{fontSize:11,color:"var(--sub)",fontFamily:"'DM Mono',monospace",textTransform:"uppercase",letterSpacing:"0.08em"}}>Mes actual</p>
+                <p style={{fontSize:11,color:"var(--muted)",fontFamily:"'DM Mono',monospace"}}>vs mismo período mes anterior</p>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 sm:gap-4">
+                {dataLoading && !data ? Array.from({length:6}).map((_, i) => <Skeleton key={i} className="h-36 rounded-2xl" />) : (
+                  <>
+                    <StatCard label="Ingresos brutos" value={currentMonth?.revenue || 0} prefix="$" accent delay={0} icon="💰" trend={pct(currentMonth?.revenue, prevMonth?.revenue)} />
+                    <StatCard label="Ticket promedio" value={currentMonth?.avgOrderValue || 0} prefix="$" delay={80} icon="🎯" trend={pct(currentMonth?.avgOrderValue, prevMonth?.avgOrderValue)} />
+                    <StatCard label="Total órdenes" value={currentMonth?.orders || 0} delay={160} icon="🛒" trend={pct(currentMonth?.orders, prevMonth?.orders)} />
+                    <StatCard label="Unidades vendidas" value={currentMonth?.units || 0} delay={240} icon="📦" trend={pct(currentMonth?.units, prevMonth?.units)} />
+                    <StatCard label="Valor stock" value={valorStock} prefix="$" delay={320} icon="🏭" sub="a costo c/IVA" />
+                    <StatCard
+                      label="Rentabilidad"
+                      value={(currentMonth?.rentabilidadPct ?? 0) !== 0 ? currentMonth?.rentabilidadPct || 0 : currentMonth?.margenPct || 0}
+                      suffix="%"
+                      decimals={1}
+                      delay={400}
+                      icon="📈"
+                      accent
+                      sub={`$${((currentMonth?.rentabilidadPct ?? 0) !== 0 ? currentMonth?.rentabilidadReal || 0 : currentMonth?.margen || 0).toLocaleString("es-UY", {maximumFractionDigits: 0})} · antes de impuestos`}
+                      trend={pct(
+                        (currentMonth?.rentabilidadPct ?? 0) !== 0 ? currentMonth?.rentabilidadPct : currentMonth?.margenPct,
+                        (prevMonth?.rentabilidadPct ?? 0) !== 0 ? prevMonth?.rentabilidadPct : prevMonth?.margenPct
+                      )}
+                    />
+                  </>
+                )}
+              </div>
+            </section>
+
+            {/* Gráfico diario */}
+            <section>
+              {dataLoading && !data ? <Skeleton className="h-80 rounded-2xl" /> : data && (
+                <>
+                  <RevenueChart byDay={data.revenueByDay} byMonth={data.revenueByMonth} currentMonthByDay={data.revenueCurrentMonth} prevMonthByDay={data.revenuePrevMonth} />
+                  <div style={{marginTop:24}} />
+                  <MonthlyChart revenueByMonth={data.revenueByMonth} />
+                </>
               )}
-            </div>
-          </>
+            </section>
+
+            {/* Waterfall + Top 10 */}
+            <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {dataLoading && !data ? (
+                <>
+                  <Skeleton className="h-80 rounded-2xl" />
+                  <Skeleton className="h-80 rounded-2xl" />
+                </>
+              ) : data && (
+                <>
+                  <WaterfallChart allOrders={data.orders} costos={data.costos} />
+                  <TopProductosResumen orders={data.orders} costos={data.costos} />
+                </>
+              )}
+            </section>
+          </div>
         )}
-      </div>
+      </main>
     </div>
   );
 }
