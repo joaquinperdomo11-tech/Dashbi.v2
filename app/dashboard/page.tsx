@@ -144,9 +144,20 @@ export default function DashboardPage() {
         <nav style={{flex:1, padding:"16px 12px"}}>
           <p style={{fontSize:9,fontFamily:"'DM Mono',monospace",textTransform:"uppercase",letterSpacing:"0.1em",padding:"0 12px 8px",color:"var(--muted)"}}>Menú principal</p>
           <button
-            style={{width:"100%",display:"flex",alignItems:"center",gap:12,padding:"10px 12px",borderRadius:12,fontSize:14,background:"var(--text)",color:"var(--bg2)",border:"none",cursor:"pointer",fontWeight:600}}>
+            style={{width:"100%",display:"flex",alignItems:"center",gap:12,padding:"10px 12px",borderRadius:12,fontSize:14,background:"var(--text)",color:"var(--bg2)",border:"none",cursor:"pointer",fontWeight:600,marginBottom:4}}>
             <span style={{fontSize:16,width:20,textAlign:"center"}}>📊</span>
             <span>Resumen</span>
+          </button>
+          <button onClick={() => router.push("/ordenes")}
+            style={{width:"100%",display:"flex",alignItems:"center",gap:12,padding:"10px 12px",borderRadius:12,fontSize:14,background:"transparent",color:"var(--sub)",border:"none",cursor:"pointer",marginBottom:4}}>
+            <span style={{fontSize:16,width:20,textAlign:"center"}}>📋</span>
+            <span>Órdenes</span>
+          </button>
+          <p style={{fontSize:9,fontFamily:"'DM Mono',monospace",textTransform:"uppercase",letterSpacing:"0.1em",padding:"12px 12px 8px",color:"var(--muted)"}}>Finanzas</p>
+          <button onClick={() => router.push("/costos")}
+            style={{width:"100%",display:"flex",alignItems:"center",gap:12,padding:"10px 12px",borderRadius:12,fontSize:14,background:"transparent",color:"var(--sub)",border:"none",cursor:"pointer"}}>
+            <span style={{fontSize:16,width:20,textAlign:"center"}}>💲</span>
+            <span>Costos</span>
           </button>
         </nav>
 
