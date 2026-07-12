@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { useUser } from "@clerk/nextjs";
 
 function useCountUp(ref: React.RefObject<HTMLDivElement | null>, target: number, prefix = "", duration = 1600) {
   useEffect(() => {
@@ -28,6 +29,7 @@ function toPoints(arr: number[], maxV: number, w = 600, h = 110, pad = 6) {
 
 export default function Home() {
   const router = useRouter();
+  const { isSignedIn } = useUser();
   const revRef = useRef<HTMLDivElement>(null);
   const ordRef = useRef<HTMLDivElement>(null);
   const uniRef = useRef<HTMLDivElement>(null);
@@ -42,8 +44,8 @@ export default function Home() {
   const prev = [30,35,38,42,48,45,40,50,55,48,42,55,60,58,50,55,62,58,52,60,55,50,48,55,58,62,55,50,58,60];
   const maxV = Math.max(...cur, ...prev) * 1.1;
 
-  const goSignUp = () => router.push("/sign-up");
-  const goSignIn = () => router.push("/sign-in");
+  const goSignUp = () => router.push(isSignedIn ? "/dashboard" : "/sign-up");
+  const goSignIn = () => router.push(isSignedIn ? "/dashboard" : "/sign-in");
   const scrollTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
 
   return (
