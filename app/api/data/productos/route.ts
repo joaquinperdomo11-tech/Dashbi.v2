@@ -27,7 +27,18 @@ export async function GET() {
   const costosMap: Record<string, string> = {};
   rawCostos.forEach(c => { if (c.sku) costosMap[c.sku] = c.costoSinIva; });
 
-  const productos = rawPubs.map(p => ({
+  // Group publicaciones by SKU — dedupe catalog duplicates (same SKU, multiple item_ids)
+  const bySku = new Map<string, typeof rawPubs[number]>();
+  rawPubs.forEach(p => {
+    const key = p.sku || `__no_sku_${p.itemId}`; // items without SKU stay separate
+    const existing = bySku.get(key);
+    // Prefer active listings, otherwise keep first seen
+    if (!existing || (p.status === "active" && existing.status !== "active")) {
+      bySku.set(key, p);
+    }
+  });
+
+  const productos = Array.from(bySku.values()).map(p => ({
     itemId: p.itemId,
     sku: p.sku || "",
     title: p.title || "",
@@ -35,6 +46,7 @@ export async function GET() {
     price: Number(p.price) || 0,
     availableQuantity: p.availableQuantity || 0,
     status: p.status || "closed",
+    freeShipping: !!p.freeShipping,
     ventasHistoricas: ventasPorSku[p.sku || ""] || 0,
     costoSinIva: costosMap[p.sku || ""] || "",
   })).sort((a, b) => b.ventasHistoricas - a.ventasHistoricas);

@@ -11,6 +11,7 @@ interface Producto {
   price: number;
   availableQuantity: number;
   status: string;
+  freeShipping: boolean;
   ventasHistoricas: number;
   costoSinIva: string;
 }
@@ -116,14 +117,14 @@ export default function ProductosPage() {
             <table style={{width:"100%",borderCollapse:"collapse",minWidth:900}}>
               <thead>
                 <tr style={{background:"var(--bg)",borderBottom:"1px solid var(--border)"}}>
-                  {["","Producto / SKU","Stock","Vendidas","Estado","Costo sin IVA"].map(h => (
+                  {["","Producto / SKU","Precio","Stock","Vendidas","Envío gratis","Estado","Costo sin IVA"].map(h => (
                     <th key={h} style={{padding:"10px 14px",textAlign:"left",fontSize:10,color:"var(--sub)",fontFamily:"'DM Mono',monospace",textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {filtered.length === 0 ? (
-                  <tr><td colSpan={6} style={{textAlign:"center",padding:40,color:"var(--sub)"}}>Sin resultados</td></tr>
+                  <tr><td colSpan={8} style={{textAlign:"center",padding:40,color:"var(--sub)"}}>Sin resultados</td></tr>
                 ) : filtered.map(p => (
                   <tr key={p.itemId} style={{borderBottom:"1px solid var(--border)"}}>
                     <td style={{padding:"8px 14px"}}>
@@ -133,12 +134,18 @@ export default function ProductosPage() {
                         <div style={{width:36,height:36,borderRadius:8,background:"var(--card2)"}} />
                       )}
                     </td>
-                    <td style={{padding:"8px 14px",maxWidth:280}}>
+                    <td style={{padding:"8px 14px",maxWidth:260}}>
                       <p style={{fontSize:13,color:"var(--text)",fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.title}</p>
                       <p style={{fontSize:11,color:"var(--sub)",fontFamily:"'DM Mono',monospace"}}>{p.sku || "sin SKU"}</p>
                     </td>
+                    <td style={{padding:"8px 14px",fontSize:13,color:"var(--text)",fontFamily:"'DM Mono',monospace",whiteSpace:"nowrap"}}>{fmt(p.price)}</td>
                     <td style={{padding:"8px 14px",fontSize:13,color:"var(--text)",fontFamily:"'DM Mono',monospace"}}>{p.availableQuantity}</td>
                     <td style={{padding:"8px 14px",fontSize:13,color:"var(--text)",fontFamily:"'DM Mono',monospace"}}>{p.ventasHistoricas}</td>
+                    <td style={{padding:"8px 14px",textAlign:"center"}}>
+                      <span style={{fontSize:14,color: p.freeShipping ? "var(--green)" : "var(--red)"}}>
+                        {p.freeShipping ? "✓" : "✗"}
+                      </span>
+                    </td>
                     <td style={{padding:"8px 14px"}}>
                       <span style={{fontSize:11,padding:"3px 10px",borderRadius:100,background:(ESTADO_COLORS[p.status]||"var(--sub)")+"18",color:ESTADO_COLORS[p.status]||"var(--sub)",fontWeight:500,whiteSpace:"nowrap"}}>
                         {ESTADO_LABELS[p.status] || p.status}

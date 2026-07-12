@@ -51,6 +51,7 @@ async function syncTenantPublicaciones(tenant: typeof tenants.$inferSelect, toke
         const item = r.body;
         const skuAttr = (item.attributes || []).find((a: any) => a.id === "SELLER_SKU");
         const sku = skuAttr?.value_name || item.seller_custom_field || "";
+        const freeShipping = !!item.shipping?.free_shipping;
 
         try {
           await db.insert(publicaciones).values({
@@ -63,12 +64,14 @@ async function syncTenantPublicaciones(tenant: typeof tenants.$inferSelect, toke
             availableQuantity: item.available_quantity || 0,
             status: item.status || "closed",
             soldQuantity: item.sold_quantity || 0,
+            freeShipping,
           }).onConflictDoUpdate({
             target: [publicaciones.tenantId, publicaciones.itemId],
             set: {
               sku, title: item.title || "", thumbnail: item.thumbnail || "",
               price: String(item.price || 0), availableQuantity: item.available_quantity || 0,
               status: item.status || "closed", soldQuantity: item.sold_quantity || 0,
+              freeShipping,
             },
           });
           synced++;

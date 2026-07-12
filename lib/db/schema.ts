@@ -59,6 +59,7 @@ export const publicaciones = pgTable("publicaciones", {
   availableQuantity: integer("available_quantity"),
   status: text("status"),
   soldQuantity: integer("sold_quantity"),
+  freeShipping: boolean("free_shipping").default(false),
 }, (table) => ({
   tenantItemUnique: uniqueIndex("tenant_item_unique").on(table.tenantId, table.itemId),
 }));
