@@ -2,12 +2,18 @@ import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { db } from "@/lib/db";
 import { tenants, mlTokens, ordenes } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { refreshMLToken } from "@/lib/ml";
 
-export async function POST() {
+const BATCH_SIZE = 50;
+
+// Processes ONE batch of 50 orders per call. Frontend calls repeatedly using `offset`.
+export async function POST(req: Request) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const body = await req.json().catch(() => ({}));
+  const offset = body.offset || 0;
 
   const [tenant] = await db.select().from(tenants).where(eq(tenants.clerkUserId, userId));
   if (!tenant?.mlUserId) return NextResponse.json({ error: "No ML connected" }, { status: 400 });
@@ -33,24 +39,20 @@ export async function POST() {
   hace90.setDate(hace90.getDate() - 90);
   const desde = hace90.toISOString().split(".")[0] + ".000-00:00";
 
-  let offset = 0, total = 999, synced = 0;
-  const shipmentIds: string[] = [];
+  const res = await fetch(
+    `https://api.mercadolibre.com/orders/search?seller=${tenant.mlUserId}&limit=${BATCH_SIZE}&offset=${offset}&sort=date_desc&order.date_created.from=${desde}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  const data = await res.json();
 
-  while (offset < total && offset < 1000) { // safety cap
-    const res = await fetch(
-      `https://api.mercadolibre.com/orders/search?seller=${tenant.mlUserId}&limit=50&offset=${offset}&sort=date_desc&order.date_created.from=${desde}`,
-      { headers: { Authorization: `Bearer ${accessToken}` } }
-    );
-    const data = await res.json();
-    if (!data.results?.length) break;
-    total = data.paging?.total || data.results.length;
+  const total = data.paging?.total || 0;
+  let synced = 0;
 
+  if (data.results?.length) {
     for (const order of data.results) {
       if (order.status === "cancelled") continue;
       for (const item of order.order_items || []) {
         const shipmentId = order.shipping?.id ? String(order.shipping.id) : null;
-        if (shipmentId) shipmentIds.push(shipmentId);
-
         try {
           await db.insert(ordenes).values({
             tenantId: tenant.id,
@@ -77,12 +79,21 @@ export async function POST() {
         }
       }
     }
-
-    offset += 50;
   }
 
-  // Update tenant to mark initial sync done
-  await db.update(tenants).set({ initialSyncDone: true, updatedAt: new Date() }).where(eq(tenants.id, tenant.id));
+  const nextOffset = offset + BATCH_SIZE;
+  const done = nextOffset >= total || !data.results?.length;
 
-  return NextResponse.json({ ok: true, synced, total, pendingShipments: shipmentIds.length });
+  if (done) {
+    await db.update(tenants).set({ initialSyncDone: true, updatedAt: new Date() }).where(eq(tenants.id, tenant.id));
+  }
+
+  return NextResponse.json({
+    ok: true,
+    synced,
+    batchOffset: offset,
+    nextOffset,
+    total,
+    done,
+  });
 }

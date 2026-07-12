@@ -5,9 +5,9 @@ import { useRouter } from "next/navigation";
 
 const LOADING_MESSAGES = [
   "Conectando con MercadoLibre...",
-  "Trayendo tus últimas ventas...",
+  "Trayendo tus ventas...",
   "Procesando tus órdenes...",
-  "Organizando tus productos más vendidos...",
+  "Organizando tus productos...",
   "Ya casi terminamos...",
 ];
 
@@ -19,8 +19,10 @@ export default function OnboardingPage() {
   const [connecting, setConnecting] = useState(false);
   const [syncing, setSyncing]       = useState(false);
   const [syncedCount, setSyncedCount] = useState(0);
+  const [totalCount, setTotalCount]   = useState(0);
   const [msgIndex, setMsgIndex]     = useState(0);
   const startTime = useRef<number>(0);
+  const cancelled = useRef(false);
 
   useEffect(() => {
     if (!isLoaded) return;
@@ -31,15 +33,13 @@ export default function OnboardingPage() {
       const { tenant: t } = await res.json();
 
       if (t.mlUserId && !t.initialSyncDone) {
-        // Connected but sync hasn't run yet
         setTenant(t);
         setSyncing(true);
         startTime.current = Date.now();
-        runInitialSync();
+        runInitialSyncLoop();
         return;
       }
       if (t.mlUserId && t.initialSyncDone) {
-        // Already fully set up — go straight to dashboard
         router.push("/dashboard");
         return;
       }
@@ -47,29 +47,44 @@ export default function OnboardingPage() {
       setLoading(false);
     };
     load();
+
+    return () => { cancelled.current = true; };
   }, [isLoaded, isSignedIn, router]);
 
   // Rotate loading messages
   useEffect(() => {
     if (!syncing) return;
     const interval = setInterval(() => {
-      setMsgIndex(i => Math.min(i + 1, LOADING_MESSAGES.length - 1));
-    }, 2200);
+      setMsgIndex(i => (i + 1) % LOADING_MESSAGES.length);
+    }, 2500);
     return () => clearInterval(interval);
   }, [syncing]);
 
-  const runInitialSync = async () => {
+  const runInitialSyncLoop = async (offset = 0) => {
+    if (cancelled.current) return;
     try {
-      const res = await fetch("/api/sync/initial", { method: "POST" });
+      const res = await fetch("/api/sync/initial", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ offset }),
+      });
       const data = await res.json();
-      setSyncedCount(data.synced || 0);
-      // Kick off background enrichment (fire and forget, don't await fully)
-      fetch("/api/sync/enrich-shipments", { method: "POST" }).catch(() => {});
+
+      setSyncedCount(prev => prev + (data.synced || 0));
+      setTotalCount(data.total || 0);
+
+      if (!data.done && data.nextOffset !== undefined) {
+        runInitialSyncLoop(data.nextOffset);
+      } else {
+        // Kick off background enrichment (fire and forget)
+        fetch("/api/sync/enrich-shipments", { method: "POST" }).catch(() => {});
+        setTimeout(() => router.push("/dashboard"), 600);
+      }
     } catch (e) {
       console.error(e);
+      // Retry once after a short delay
+      setTimeout(() => runInitialSyncLoop(offset), 2000);
     }
-    // Small delay so the last message is visible
-    setTimeout(() => router.push("/dashboard"), 800);
   };
 
   const connectML = async () => {
@@ -88,26 +103,43 @@ export default function OnboardingPage() {
   );
 
   if (syncing) {
+    const pct = totalCount > 0 ? Math.min(100, Math.round((syncedCount / totalCount) * 100)) : 0;
+    const elapsed = (Date.now() - startTime.current) / 1000;
+    const rate = syncedCount > 0 ? syncedCount / elapsed : 0;
+    const remaining = rate > 0 && totalCount > syncedCount ? Math.ceil((totalCount - syncedCount) / rate) : null;
+
     return (
       <div style={{minHeight:"100vh",background:"var(--bg)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
-        <div style={{maxWidth:440,width:"100%",textAlign:"center"}}>
-          <div style={{position:"relative",width:72,height:72,margin:"0 auto 32px"}}>
+        <div style={{maxWidth:460,width:"100%",textAlign:"center"}}>
+          <div style={{position:"relative",width:72,height:72,margin:"0 auto 28px"}}>
             <div style={{position:"absolute",inset:0,border:"4px solid var(--border)",borderRadius:"50%"}} />
             <div style={{position:"absolute",inset:0,border:"4px solid transparent",borderTopColor:"var(--accent)",borderRadius:"50%",animation:"spin 1s linear infinite"}} />
             <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26}}>📦</div>
           </div>
-          <h2 style={{fontFamily:"'DM Serif Display',serif",fontSize:22,color:"var(--text)",marginBottom:12,transition:"opacity 0.3s"}}>
+
+          <h2 style={{fontFamily:"'DM Serif Display',serif",fontSize:22,color:"var(--text)",marginBottom:8,transition:"opacity 0.3s"}}>
             {LOADING_MESSAGES[msgIndex]}
           </h2>
-          <p style={{color:"var(--sub)",fontSize:14,lineHeight:1.6}}>
-            Estamos trayendo tus últimos 90 días de ventas.<br/>
-            Esto puede tardar unos segundos, no cierres esta ventana.
+          <p style={{color:"var(--sub)",fontSize:14,lineHeight:1.6,marginBottom:24}}>
+            Estamos trayendo tus últimos 90 días de ventas.<br/>No cierres esta ventana.
           </p>
-          {syncedCount > 0 && (
-            <p style={{color:"var(--accent)",fontSize:13,fontWeight:600,marginTop:16}}>
-              {syncedCount} órdenes encontradas hasta ahora
-            </p>
-          )}
+
+          {/* Progress bar */}
+          <div style={{background:"var(--border)",borderRadius:100,height:8,overflow:"hidden",marginBottom:12}}>
+            <div style={{background:"var(--accent)",height:"100%",width:`${pct}%`,transition:"width 0.4s ease",borderRadius:100}} />
+          </div>
+
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:12.5,color:"var(--sub)"}}>
+            <span>
+              {totalCount > 0
+                ? <><strong style={{color:"var(--accent)"}}>{syncedCount}</strong> de {totalCount} órdenes</>
+                : "Contactando MercadoLibre..."}
+            </span>
+            {remaining !== null && remaining > 0 && (
+              <span>~{remaining < 60 ? `${remaining}s` : `${Math.ceil(remaining/60)} min`} restantes</span>
+            )}
+          </div>
+
           <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
         </div>
       </div>
@@ -150,7 +182,7 @@ export default function OnboardingPage() {
         <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:20,padding:"10px 14px",background:"var(--accent-bg)",borderRadius:10}}>
           <span style={{fontSize:16}}>⏱️</span>
           <p style={{color:"var(--accent)",fontSize:12.5,lineHeight:1.4}}>
-            Al conectar, vamos a traer tus últimos <strong>90 días de ventas</strong>. Puede tardar un minuto.
+            Al conectar, vamos a traer tus últimos <strong>90 días de ventas</strong>. Puede tardar un par de minutos.
           </p>
         </div>
 
