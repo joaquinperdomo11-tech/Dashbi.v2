@@ -26,21 +26,18 @@ export default function OnboardingPage() {
   const syncStarted = useRef(false);
 
   useEffect(() => {
-    console.log("[onboarding] effect fired", { isLoaded, isSignedIn });
     if (!isLoaded) return;
     if (!isSignedIn) { router.push("/sign-in"); return; }
 
     const load = async () => {
-      console.log("[onboarding] fetching tenant...");
       const res = await fetch("/api/tenant");
       const { tenant: t } = await res.json();
-      console.log("[onboarding] tenant loaded", t);
 
       if (t.mlUserId && !t.initialSyncDone) {
-        if (syncStarted.current) { console.log("[onboarding] sync already started, skipping"); return; }
+        if (syncStarted.current) { return; }
         syncStarted.current = true;
-        console.log("[onboarding] starting sync loop");
         setTenant(t);
+        setLoading(false);
         setSyncing(true);
         startTime.current = Date.now();
         runInitialSyncLoop();
@@ -70,9 +67,8 @@ export default function OnboardingPage() {
   const inFlight = useRef(false);
 
   const runInitialSyncLoop = async (offset = 0) => {
-    console.log("[onboarding] runInitialSyncLoop called, offset=", offset);
-    if (cancelled.current) { console.log("[onboarding] cancelled, aborting"); return; }
-    if (inFlight.current) { console.log("[onboarding] already in flight, skipping"); return; }
+    if (cancelled.current) { return; }
+    if (inFlight.current) { return; }
     inFlight.current = true;
     try {
       const res = await fetch("/api/sync/initial", {
@@ -81,7 +77,6 @@ export default function OnboardingPage() {
         body: JSON.stringify({ offset }),
       });
       const data = await res.json();
-      console.log("[onboarding] batch result", data);
 
       setSyncedCount(prev => prev + (data.synced || 0));
       setTotalCount(data.total || 0);
@@ -91,7 +86,6 @@ export default function OnboardingPage() {
       if (!data.done && data.nextOffset !== undefined) {
         runInitialSyncLoop(data.nextOffset);
       } else {
-        console.log("[onboarding] sync loop done, redirecting");
         fetch("/api/sync/enrich-shipments", { method: "POST" }).catch(() => {});
         setTimeout(() => router.push("/dashboard"), 600);
       }
@@ -109,8 +103,6 @@ export default function OnboardingPage() {
     const { url } = await res.json();
     window.location.href = url;
   };
-
-  console.log("[onboarding] render", { loading, syncing, syncedCount, totalCount });
 
   if (loading) return (
     <div style={{minHeight:"100vh",background:"var(--bg)",display:"flex",alignItems:"center",justifyContent:"center"}}>
