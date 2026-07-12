@@ -23,6 +23,7 @@ export default function OnboardingPage() {
   const [msgIndex, setMsgIndex]     = useState(0);
   const startTime = useRef<number>(0);
   const cancelled = useRef(false);
+  const syncStarted = useRef(false);
 
   useEffect(() => {
     if (!isLoaded) return;
@@ -33,6 +34,8 @@ export default function OnboardingPage() {
       const { tenant: t } = await res.json();
 
       if (t.mlUserId && !t.initialSyncDone) {
+        if (syncStarted.current) return;
+        syncStarted.current = true;
         setTenant(t);
         setSyncing(true);
         startTime.current = Date.now();
@@ -60,8 +63,12 @@ export default function OnboardingPage() {
     return () => clearInterval(interval);
   }, [syncing]);
 
+  const inFlight = useRef(false);
+
   const runInitialSyncLoop = async (offset = 0) => {
     if (cancelled.current) return;
+    if (inFlight.current) return; // avoid overlapping calls
+    inFlight.current = true;
     try {
       const res = await fetch("/api/sync/initial", {
         method: "POST",
@@ -73,16 +80,17 @@ export default function OnboardingPage() {
       setSyncedCount(prev => prev + (data.synced || 0));
       setTotalCount(data.total || 0);
 
+      inFlight.current = false;
+
       if (!data.done && data.nextOffset !== undefined) {
         runInitialSyncLoop(data.nextOffset);
       } else {
-        // Kick off background enrichment (fire and forget)
         fetch("/api/sync/enrich-shipments", { method: "POST" }).catch(() => {});
         setTimeout(() => router.push("/dashboard"), 600);
       }
     } catch (e) {
       console.error(e);
-      // Retry once after a short delay
+      inFlight.current = false;
       setTimeout(() => runInitialSyncLoop(offset), 2000);
     }
   };
@@ -133,7 +141,9 @@ export default function OnboardingPage() {
             <span>
               {totalCount > 0
                 ? <><strong style={{color:"var(--accent)"}}>{syncedCount}</strong> de {totalCount} órdenes</>
-                : "Contactando MercadoLibre..."}
+                : syncedCount > 0
+                  ? <><strong style={{color:"var(--accent)"}}>{syncedCount}</strong> órdenes encontradas</>
+                  : "Contactando MercadoLibre..."}
             </span>
             {remaining !== null && remaining > 0 && (
               <span>~{remaining < 60 ? `${remaining}s` : `${Math.ceil(remaining/60)} min`} restantes</span>
