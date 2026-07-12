@@ -21,6 +21,7 @@ export default function DashboardPage() {
   const [orders, setOrders]   = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingOrders, setLoadingOrders] = useState(false);
+  const [enriching, setEnriching] = useState(false);
 
   useEffect(() => {
     if (!isLoaded) return;
@@ -38,10 +39,36 @@ export default function DashboardPage() {
         const data = await oRes.json();
         setOrders(data.orders || []);
         setLoadingOrders(false);
+
+        // Check if shipment enrichment is still pending
+        const statusRes = await fetch("/api/sync/status");
+        const status = await statusRes.json();
+        if (status.pending > 0) {
+          setEnriching(true);
+          continueEnrichment();
+        }
       }
     };
     load();
   }, [isLoaded, isSignedIn, router]);
+
+  const continueEnrichment = async (attempt = 0) => {
+    if (attempt > 100) { setEnriching(false); return; } // safety cap ~80s
+    try {
+      const res = await fetch("/api/sync/enrich-shipments", { method: "POST" });
+      const data = await res.json();
+      if (!data.done) {
+        setTimeout(() => continueEnrichment(attempt + 1), 800);
+      } else {
+        setEnriching(false);
+        // Refresh orders to show updated shipment data
+        const oRes = await fetch("/api/data/orders");
+        const oData = await oRes.json();
+        setOrders(oData.orders || []);
+      }
+    } catch {
+      setEnriching(false);
+    }
 
   const ventasPorDia = useMemo(() => {
     const map: Record<string, { fecha: string; ingresos: number; ordenes: number }> = {};
@@ -100,6 +127,15 @@ export default function DashboardPage() {
           </div>
         ) : (
           <>
+            {enriching && (
+              <div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 16px",background:"var(--accent-bg)",borderRadius:12,border:"1px solid var(--accent)"}}>
+                <div style={{width:16,height:16,border:"2px solid var(--accent)",borderTopColor:"transparent",borderRadius:"50%",animation:"spin 0.8s linear infinite",flexShrink:0}} />
+                <p style={{color:"var(--accent)",fontSize:13,fontWeight:500}}>
+                  Seguimos completando el detalle de tus envíos — los datos se irán actualizando automáticamente.
+                </p>
+                <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+              </div>
+            )}
             <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:16}}>
               {[
                 {label:"Ingresos", val: loadingOrders ? "..." : fmt(totalIngresos), icon:"💰", accent:true},
