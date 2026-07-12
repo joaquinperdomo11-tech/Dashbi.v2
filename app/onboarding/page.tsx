@@ -70,8 +70,9 @@ export default function OnboardingPage() {
   const inFlight = useRef(false);
 
   const runInitialSyncLoop = async (offset = 0) => {
-    if (cancelled.current) return;
-    if (inFlight.current) return; // avoid overlapping calls
+    console.log("[onboarding] runInitialSyncLoop called, offset=", offset);
+    if (cancelled.current) { console.log("[onboarding] cancelled, aborting"); return; }
+    if (inFlight.current) { console.log("[onboarding] already in flight, skipping"); return; }
     inFlight.current = true;
     try {
       const res = await fetch("/api/sync/initial", {
@@ -80,6 +81,7 @@ export default function OnboardingPage() {
         body: JSON.stringify({ offset }),
       });
       const data = await res.json();
+      console.log("[onboarding] batch result", data);
 
       setSyncedCount(prev => prev + (data.synced || 0));
       setTotalCount(data.total || 0);
@@ -89,11 +91,12 @@ export default function OnboardingPage() {
       if (!data.done && data.nextOffset !== undefined) {
         runInitialSyncLoop(data.nextOffset);
       } else {
+        console.log("[onboarding] sync loop done, redirecting");
         fetch("/api/sync/enrich-shipments", { method: "POST" }).catch(() => {});
         setTimeout(() => router.push("/dashboard"), 600);
       }
     } catch (e) {
-      console.error(e);
+      console.error("[onboarding] batch error", e);
       inFlight.current = false;
       setTimeout(() => runInitialSyncLoop(offset), 2000);
     }
@@ -106,6 +109,8 @@ export default function OnboardingPage() {
     const { url } = await res.json();
     window.location.href = url;
   };
+
+  console.log("[onboarding] render", { loading, syncing, syncedCount, totalCount });
 
   if (loading) return (
     <div style={{minHeight:"100vh",background:"var(--bg)",display:"flex",alignItems:"center",justifyContent:"center"}}>
