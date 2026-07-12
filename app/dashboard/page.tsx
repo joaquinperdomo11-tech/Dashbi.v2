@@ -69,6 +69,7 @@ export default function DashboardPage() {
     } catch {
       setEnriching(false);
     }
+  };
 
   const ventasPorDia = useMemo(() => {
     const map: Record<string, { fecha: string; ingresos: number; ordenes: number }> = {};
