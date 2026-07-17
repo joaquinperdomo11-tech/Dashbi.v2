@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { tenants, mlTokens, preguntas, publicaciones } from "@/lib/db/schema";
-import { eq, or } from "drizzle-orm";
+import { eq, or, and, lt } from "drizzle-orm";
 import { refreshMLToken } from "@/lib/ml";
 
 async function syncTenantPreguntas(tenant: typeof tenants.$inferSelect, token: typeof mlTokens.$inferSelect) {
@@ -25,6 +25,8 @@ async function syncTenantPreguntas(tenant: typeof tenants.$inferSelect, token: t
   pubsList.forEach(p => { if (p.itemId) skuByItem[p.itemId] = p.sku || ""; });
 
   let synced = 0;
+  const hace30 = new Date();
+  hace30.setDate(hace30.getDate() - 30);
 
   // Unanswered questions
   const resU = await fetch(
@@ -34,6 +36,7 @@ async function syncTenantPreguntas(tenant: typeof tenants.$inferSelect, token: t
   const dataU = await resU.json();
 
   for (const q of dataU.questions || []) {
+    if (q.date_created && new Date(q.date_created) < hace30) continue;
     try {
       await db.insert(preguntas).values({
         tenantId: tenant.id,
@@ -85,6 +88,15 @@ async function syncTenantPreguntas(tenant: typeof tenants.$inferSelect, token: t
       synced++;
     } catch (e) { console.error("Insert pregunta error:", e); }
   }
+
+  // Clean up unanswered questions older than 30 days (no longer worth showing)
+  await db.delete(preguntas).where(
+    and(
+      eq(preguntas.tenantId, tenant.id),
+      eq(preguntas.status, "UNANSWERED"),
+      lt(preguntas.dateCreated, hace30)
+    )
+  );
 
   return { tenantId: tenant.id, synced };
 }
