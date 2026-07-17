@@ -73,3 +73,22 @@ export const costos = pgTable("costos", {
 }, (table) => ({
   tenantSkuUnique: uniqueIndex("tenant_sku_unique").on(table.tenantId, table.sku),
 }));
+
+export const preguntas = pgTable("preguntas", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
+  questionId: text("question_id").notNull(),
+  itemId: text("item_id").notNull(),
+  itemTitle: text("item_title"),
+  itemThumbnail: text("item_thumbnail"),
+  sku: text("sku"),
+  fromNickname: text("from_nickname"),
+  text: text("text"),
+  answerText: text("answer_text"),
+  status: text("status").default("UNANSWERED"),
+  dateCreated: timestamp("date_created", { withTimezone: true }),
+  dateAnswered: timestamp("date_answered", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  tenantQuestionUnique: uniqueIndex("tenant_question_unique").on(table.tenantId, table.questionId),
+}));
