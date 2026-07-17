@@ -41,6 +41,7 @@ export default function PreguntasPage() {
   const [editingDespedida, setEditingDespedida] = useState(false);
   const [respuestas, setRespuestas] = useState<Record<string, string>>({});
   const [sending, setSending]       = useState<string | null>(null);
+  const [errors, setErrors]         = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!isLoaded) return;
@@ -70,6 +71,7 @@ export default function PreguntasPage() {
     const body = respuestas[qId] || "";
     if (!body.trim()) return;
     setSending(qId);
+    setErrors(prev => { const n = { ...prev }; delete n[qId]; return n; });
     const fullText = buildFullMessage(qId);
     const res = await fetch("/api/data/preguntas/responder", {
       method: "POST",
@@ -82,7 +84,13 @@ export default function PreguntasPage() {
       load(tab);
     } else {
       const err = await res.json();
-      alert(err.error || "No se pudo enviar la respuesta");
+      let msg = "No se pudo enviar la respuesta. Intentá de nuevo.";
+      if (err.detail && err.detail.includes("not_active_item")) {
+        msg = "No se puede responder: la publicación está pausada o cerrada en MercadoLibre.";
+      } else if (err.error) {
+        msg = err.error;
+      }
+      setErrors(prev => ({ ...prev, [qId]: msg }));
     }
     setSending(null);
   };
@@ -162,6 +170,12 @@ export default function PreguntasPage() {
 
                   {tab === "UNANSWERED" && isOpen && (
                     <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                      {errors[p.questionId] && (
+                        <div style={{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",background:"var(--red-bg)",border:"1px solid var(--red)",borderRadius:10}}>
+                          <span style={{fontSize:14}}>⚠️</span>
+                          <p style={{fontSize:13,color:"var(--red)"}}>{errors[p.questionId]}</p>
+                        </div>
+                      )}
                       {/* Saludo */}
                       <div>
                         <label style={{fontSize:11,color:"var(--sub)",display:"flex",justifyContent:"space-between",marginBottom:5}}>
