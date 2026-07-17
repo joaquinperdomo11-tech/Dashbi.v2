@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import { tenants, ordenes, mlTokens } from "@/lib/db/schema";
 import { eq, sql, and, gte } from "drizzle-orm";
 
-const ADMIN_EMAIL = "joaquin.perdomo11@gmai.com";
+const ADMIN_EMAIL = "joaquin.perdomo11@gmail.com";
 
 async function isAdmin() {
   const { userId } = await auth();

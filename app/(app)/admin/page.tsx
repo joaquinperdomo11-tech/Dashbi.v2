@@ -3,7 +3,7 @@ import { useEffect, useState, useMemo } from "react";
 import { useUser } from "@clerk/nextjs";
 import { useRouter } from "next/navigation";
 
-const ADMIN_EMAIL = "joaquin.perdomo11@gmai.com";
+const ADMIN_EMAIL = "joaquin.perdomo11@gmail.com";
 
 interface TenantRow {
   id: string;
