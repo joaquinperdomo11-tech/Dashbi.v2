@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { tenants, mlTokens, publicaciones } from "@/lib/db/schema";
-import { eq, or } from "drizzle-orm";
+import { tenants, mlTokens, publicaciones, syncCursors } from "@/lib/db/schema";
+import { eq, or, and } from "drizzle-orm";
 import { refreshMLToken } from "@/lib/ml";
 
-const BATCH_SIZE = 20; // items per call, well under Vercel/cron timeout
+const BATCH_SIZE = 20;
+const SYNC_TYPE = "publicaciones";
+const REFRESH_ITEM_IDS_AFTER_MS = 60 * 60 * 1000; // re-fetch full id list once per hour
 
 async function getAccessToken(tenant: typeof tenants.$inferSelect, token: typeof mlTokens.$inferSelect) {
   let accessToken = token.accessToken;
@@ -22,10 +24,8 @@ async function getAccessToken(tenant: typeof tenants.$inferSelect, token: typeof
   return accessToken;
 }
 
-// Process ONE tenant, ONE batch of items per call.
-// Progress is tracked via ml_tokens.updatedAt marker approach won't work here,
-// so we store cursor state in-memory per call using query params, cycling
-// through tenants round-robin: each cron tick advances exactly one tenant by one batch.
+// Each invocation: pick ONE tenant (round robin, least-recently-processed first),
+// process ONE batch of items for it, persist cursor. Fast — always under a few seconds.
 export async function GET(req: NextRequest) {
   const authHeader = req.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
@@ -34,46 +34,71 @@ export async function GET(req: NextRequest) {
 
   const activeTenants = await db.select().from(tenants)
     .where(or(eq(tenants.status, "trial"), eq(tenants.status, "active")));
-
-  // Pick ONE tenant per invocation, rotating by minute so all tenants get covered over time
   const eligible = activeTenants.filter(t => t.mlUserId);
   if (eligible.length === 0) return NextResponse.json({ ok: true, message: "No tenants" });
 
-  const minuteSlot = Math.floor(Date.now() / 60000);
-  const tenant = eligible[minuteSlot % eligible.length];
+  // Pick the tenant whose cursor was updated longest ago (or never)
+  const cursors = await db.select().from(syncCursors).where(eq(syncCursors.syncType, SYNC_TYPE));
+  const cursorByTenant = new Map(cursors.map(c => [c.tenantId, c]));
+
+  const sorted = [...eligible].sort((a, b) => {
+    const ca = cursorByTenant.get(a.id)?.updatedAt?.getTime() || 0;
+    const cb = cursorByTenant.get(b.id)?.updatedAt?.getTime() || 0;
+    return ca - cb;
+  });
+  const tenant = sorted[0];
+  const cursor = cursorByTenant.get(tenant.id);
 
   const [token] = await db.select().from(mlTokens).where(eq(mlTokens.tenantId, tenant.id));
-  if (!token) return NextResponse.json({ ok: true, message: "No token for selected tenant" });
+  if (!token) return NextResponse.json({ ok: true, message: "No token" });
 
   const accessToken = await getAccessToken(tenant, token);
   if (!accessToken) return NextResponse.json({ ok: false, error: "refresh_failed" });
 
-  // Get item IDs (cheap call, paginated internally but fast — search endpoint is lightweight)
   let itemIds: string[] = [];
-  let offset = 0;
-  while (true) {
-    const res = await fetch(
-      `https://api.mercadolibre.com/users/${tenant.mlUserId}/items/search?limit=100&offset=${offset}`,
-      { headers: { Authorization: `Bearer ${accessToken}` } }
-    );
-    const data = await res.json();
-    if (!data.results?.length) break;
-    itemIds = itemIds.concat(data.results);
-    if (itemIds.length >= (data.paging?.total || 0)) break;
-    offset += 100;
-    if (offset > 2000) break; // safety cap
+  const needsFreshList = !cursor?.itemIds || !cursor.lastFullSync ||
+    (Date.now() - cursor.lastFullSync.getTime() > REFRESH_ITEM_IDS_AFTER_MS);
+
+  if (needsFreshList) {
+    // Fetch ALL ids (paginated) — this endpoint is lightweight/fast even for hundreds of items
+    let offset = 0;
+    while (true) {
+      const res = await fetch(
+        `https://api.mercadolibre.com/users/${tenant.mlUserId}/items/search?limit=100&offset=${offset}`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+      const data = await res.json();
+      if (!data.results?.length) break;
+      itemIds = itemIds.concat(data.results);
+      if (itemIds.length >= (data.paging?.total || 0)) break;
+      offset += 100;
+      if (offset > 3000) break;
+    }
+
+    await db.insert(syncCursors).values({
+      tenantId: tenant.id,
+      syncType: SYNC_TYPE,
+      itemIds: JSON.stringify(itemIds),
+      cursorPosition: 0,
+      lastFullSync: new Date(),
+      updatedAt: new Date(),
+    }).onConflictDoUpdate({
+      target: [syncCursors.tenantId, syncCursors.syncType],
+      set: { itemIds: JSON.stringify(itemIds), cursorPosition: 0, lastFullSync: new Date(), updatedAt: new Date() },
+    });
+  } else {
+    itemIds = JSON.parse(cursor!.itemIds || "[]");
   }
 
   if (itemIds.length === 0) {
     return NextResponse.json({ ok: true, tenantId: tenant.id, synced: 0, total: 0 });
   }
 
-  // Determine which batch to process this tick, based on a rotating offset within this tenant
-  const batchSlot = Math.floor(Date.now() / 15000); // changes every 15s
-  const totalBatches = Math.ceil(itemIds.length / BATCH_SIZE);
-  const batchIndex = batchSlot % totalBatches;
-  const batchStart = batchIndex * BATCH_SIZE;
-  const batch = itemIds.slice(batchStart, batchStart + BATCH_SIZE);
+  let position = cursor?.cursorPosition || 0;
+  if (position >= itemIds.length) position = 0; // wrap around, start a new full pass
+
+  const batch = itemIds.slice(position, position + BATCH_SIZE);
+  const nextPosition = position + BATCH_SIZE;
 
   let synced = 0;
   const res = await fetch(
@@ -118,12 +143,17 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  await db.update(syncCursors).set({
+    cursorPosition: nextPosition,
+    updatedAt: new Date(),
+  }).where(and(eq(syncCursors.tenantId, tenant.id), eq(syncCursors.syncType, SYNC_TYPE)));
+
   return NextResponse.json({
     ok: true,
     tenantId: tenant.id,
-    batchIndex,
-    totalBatches,
     synced,
+    position,
+    nextPosition,
     totalItems: itemIds.length,
   });
 }

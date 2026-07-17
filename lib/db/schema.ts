@@ -92,3 +92,15 @@ export const preguntas = pgTable("preguntas", {
 }, (table) => ({
   tenantQuestionUnique: uniqueIndex("tenant_question_unique").on(table.tenantId, table.questionId),
 }));
+
+export const syncCursors = pgTable("sync_cursors", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
+  syncType: text("sync_type").notNull(),
+  itemIds: text("item_ids"),
+  cursorPosition: integer("cursor_position").default(0),
+  lastFullSync: timestamp("last_full_sync", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  tenantSyncTypeUnique: uniqueIndex("tenant_sync_type_unique").on(table.tenantId, table.syncType),
+}));
