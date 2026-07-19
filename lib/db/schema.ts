@@ -104,3 +104,27 @@ export const syncCursors = pgTable("sync_cursors", {
 }, (table) => ({
   tenantSyncTypeUnique: uniqueIndex("tenant_sync_type_unique").on(table.tenantId, table.syncType),
 }));
+
+export const reputacion = pgTable("reputacion", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull().unique(),
+  storeName: text("store_name"),
+  levelId: text("level_id"),
+  claimsRate: numeric("claims_rate"),
+  claimsLimit: numeric("claims_limit"),
+  cancellationsRate: numeric("cancellations_rate"),
+  cancellationsLimit: numeric("cancellations_limit"),
+  delayedRate: numeric("delayed_rate"),
+  delayedLimit: numeric("delayed_limit"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
+export const visitasMensuales = pgTable("visitas_mensuales", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
+  monthKey: text("month_key").notNull(),
+  totalVisitas: integer("total_visitas").default(0),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  tenantMonthUnique: uniqueIndex("tenant_month_unique").on(table.tenantId, table.monthKey),
+}));
