@@ -14,18 +14,65 @@ function Skeleton({ className }: { className: string }) {
   return <div className={`skeleton ${className}`} />;
 }
 
+interface ReputacionData {
+  storeName: string;
+  levelId: string;
+  claims: { rate: number; limit: number };
+  cancellations: { rate: number; limit: number };
+  delayed: { rate: number; limit: number };
+  visitas: {
+    current: number; previous: number;
+    conversionCurrent: number; conversionPrevious: number;
+    ordersCurrent: number; ordersPrevious: number;
+  };
+}
+
+const LEVEL_LABELS: Record<string, string> = {
+  "5_green": "Verde", "4_light_green": "Verde claro",
+  "3_yellow": "Amarillo", "2_orange": "Naranja", "1_red": "Rojo",
+};
+const LEVEL_COLORS: Record<string, string> = {
+  "5_green": "var(--green)", "4_light_green": "var(--green)",
+  "3_yellow": "#CA8A04", "2_orange": "var(--accent)", "1_red": "var(--red)",
+};
+
+function getSaludo() {
+  const h = new Date().getHours();
+  if (h < 12) return "Buenos días";
+  if (h < 19) return "Buenas tardes";
+  return "Buenas noches";
+}
+
+function fmt(n: number) { return "$" + Math.round(n).toLocaleString("es-UY"); }
+function pctFmt(n: number) { return n.toFixed(1) + "%"; }
+
+function MetricaReputacion({ label, rate, limit }: { label: string; rate: number; limit: number }) {
+  const pct = limit > 0 ? Math.min(100, (rate / limit) * 100) : 0;
+  const isOk = rate <= limit;
+  return (
+    <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:16,padding:16}}>
+      <p style={{fontSize:12,color:"var(--sub)",marginBottom:8}}>{label}</p>
+      <p style={{fontSize:24,fontWeight:700,marginBottom:8,color: isOk ? "var(--accent)" : "var(--red)"}}>{rate.toFixed(2)}%</p>
+      <div style={{height:4,background:"var(--border)",borderRadius:100,overflow:"hidden",marginBottom:8}}>
+        <div style={{width:`${pct}%`,height:"100%",background: isOk ? "var(--accent)" : "var(--red)"}} />
+      </div>
+      <p style={{fontSize:11,color:"var(--muted)"}}>Límite: {limit.toFixed(1)}%</p>
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   const { isLoaded, isSignedIn } = useUser();
   const router = useRouter();
 
   const [tenant, setTenant]       = useState<any>(null);
   const [data, setData]           = useState<DashboardData | null>(null);
+  const [reputacion, setReputacion] = useState<ReputacionData | null>(null);
   const [tenantLoading, setTenantLoading] = useState(true);
   const [dataLoading, setDataLoading]     = useState(false);
   const [enriching, setEnriching] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-  // Load tenant + kick off connect flow if needed
   useEffect(() => {
     if (!isLoaded) return;
     if (!isSignedIn) { router.push("/sign-in"); return; }
@@ -42,11 +89,15 @@ export default function DashboardPage() {
   const fetchDashboardData = useCallback(async () => {
     setDataLoading(true);
     try {
-      const res = await fetch("/api/data/dashboard");
+      const [res, repRes] = await Promise.all([
+        fetch("/api/data/dashboard"),
+        fetch("/api/data/reputacion"),
+      ]);
       if (!res.ok) throw new Error("fetch failed");
       const json = await res.json();
       setData(json);
       setLastUpdated(new Date());
+      if (repRes.ok) setReputacion(await repRes.json());
     } catch (e) {
       console.error(e);
     } finally {
@@ -54,7 +105,6 @@ export default function DashboardPage() {
     }
   }, []);
 
-  // Load dashboard data once ML is connected, then poll every 5 min
   useEffect(() => {
     if (!tenant?.mlUserId) return;
     fetchDashboardData();
@@ -62,7 +112,6 @@ export default function DashboardPage() {
     return () => clearInterval(interval);
   }, [tenant?.mlUserId, fetchDashboardData]);
 
-  // Poll shipment enrichment status while pending
   useEffect(() => {
     if (!tenant?.mlUserId) return;
     let cancelled = false;
@@ -119,6 +168,8 @@ export default function DashboardPage() {
     ? Math.max(0, Math.ceil((new Date(tenant.trialEndsAt).getTime() - Date.now()) / 86400000))
     : 0;
 
+  const hoy = new Date().toLocaleDateString("es-UY", { day: "numeric", month: "long", year: "numeric" });
+
   if (tenantLoading) return (
     <div style={{minHeight:"100vh",background:"var(--bg)",display:"flex",alignItems:"center",justifyContent:"center"}}>
       <div style={{width:28,height:28,border:"3px solid var(--border)",borderTopColor:"var(--accent)",borderRadius:"50%",animation:"spin 0.8s linear infinite"}} />
@@ -139,13 +190,43 @@ export default function DashboardPage() {
           </div>
         ) : (
           <div style={{maxWidth:1200, margin:"0 auto", display:"flex", flexDirection:"column", gap:24}}>
-            {daysLeft > 0 && tenant?.status === "trial" && (
-              <div style={{display:"flex",justifyContent:"flex-end"}}>
-                <span style={{background:"var(--accent-bg)",color:"var(--accent)",fontSize:12,padding:"5px 14px",borderRadius:100,fontWeight:500}}>
-                  ⏳ {daysLeft} días de prueba
-                </span>
+
+            {/* Saludo + reputación */}
+            <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
+              <div>
+                <p style={{fontFamily:"'DM Serif Display',serif",fontSize:22,color:"var(--text)"}}>
+                  {getSaludo()}{reputacion?.storeName ? `, ${reputacion.storeName}` : ""} 👋
+                </p>
+                <p style={{fontSize:13,color:"var(--sub)",marginTop:4,textTransform:"capitalize"}}>{hoy}</p>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                {reputacion?.levelId && (
+                  <span style={{
+                    background: (LEVEL_COLORS[reputacion.levelId] || "var(--sub)") + "18",
+                    color: LEVEL_COLORS[reputacion.levelId] || "var(--sub)",
+                    fontSize:12,fontWeight:500,padding:"6px 14px",borderRadius:100,
+                  }}>
+                    Reputación: {LEVEL_LABELS[reputacion.levelId] || reputacion.levelId}
+                  </span>
+                )}
+                {daysLeft > 0 && tenant?.status === "trial" && (
+                  <span style={{background:"var(--accent-bg)",color:"var(--accent)",fontSize:12,padding:"5px 14px",borderRadius:100,fontWeight:500}}>
+                    ⏳ {daysLeft} días de prueba
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* 3 cards de reputación */}
+            {reputacion && (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <MetricaReputacion label="Ventas con reclamos" rate={reputacion.claims.rate} limit={reputacion.claims.limit} />
+                <MetricaReputacion label="Canceladas" rate={reputacion.cancellations.rate} limit={reputacion.cancellations.limit} />
+                <MetricaReputacion label="Despacho con demora" rate={reputacion.delayed.rate} limit={reputacion.delayed.limit} />
               </div>
             )}
+
+            <div style={{borderTop:"1px solid var(--border)"}} />
 
             {enriching && (
               <div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 16px",background:"var(--accent-bg)",borderRadius:12,border:"1px solid var(--accent)"}}>
@@ -206,6 +287,33 @@ export default function DashboardPage() {
                 </>
               )}
             </section>
+
+            {/* Visitas y conversión */}
+            {reputacion && (
+              <section>
+                <p style={{fontSize:11,color:"var(--sub)",fontFamily:"'DM Mono',monospace",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:12}}>
+                  Visitas y conversión
+                </p>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:16,padding:16}}>
+                    <p style={{fontSize:11,color:"var(--sub)",marginBottom:6}}>Visitas este mes</p>
+                    <p style={{fontSize:22,fontWeight:700,color:"var(--text)"}}>{reputacion.visitas.current.toLocaleString("es-UY")}</p>
+                  </div>
+                  <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:16,padding:16}}>
+                    <p style={{fontSize:11,color:"var(--sub)",marginBottom:6}}>Visitas mes anterior</p>
+                    <p style={{fontSize:22,fontWeight:700,color:"var(--sub)"}}>{reputacion.visitas.previous.toLocaleString("es-UY")}</p>
+                  </div>
+                  <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:16,padding:16}}>
+                    <p style={{fontSize:11,color:"var(--sub)",marginBottom:6}}>Conversión este mes</p>
+                    <p style={{fontSize:22,fontWeight:700,color:"var(--accent)"}}>{pctFmt(reputacion.visitas.conversionCurrent)}</p>
+                  </div>
+                  <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:16,padding:16}}>
+                    <p style={{fontSize:11,color:"var(--sub)",marginBottom:6}}>Conversión mes anterior</p>
+                    <p style={{fontSize:22,fontWeight:700,color:"var(--sub)"}}>{pctFmt(reputacion.visitas.conversionPrevious)}</p>
+                  </div>
+                </div>
+              </section>
+            )}
 
             {/* Waterfall + Top 10 */}
             <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
