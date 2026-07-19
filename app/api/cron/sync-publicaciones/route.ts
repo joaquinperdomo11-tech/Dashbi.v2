@@ -1,15 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { tenants, mlTokens, publicaciones } from "@/lib/db/schema";
-import { eq, or } from "drizzle-orm";
+import { tenants, mlTokens, publicaciones, syncCursors } from "@/lib/db/schema";
+import { eq, or, and } from "drizzle-orm";
 import { refreshMLToken } from "@/lib/ml";
 
-async function syncTenantPublicaciones(tenant: typeof tenants.$inferSelect, token: typeof mlTokens.$inferSelect) {
-  let accessToken = token.accessToken;
+const BATCH_SIZE = 20;
+const SYNC_TYPE = "publicaciones";
+const REFRESH_ITEM_IDS_AFTER_MS = 60 * 60 * 1000; // re-fetch full id list once per hour
 
+async function getAccessToken(tenant: typeof tenants.$inferSelect, token: typeof mlTokens.$inferSelect) {
+  let accessToken = token.accessToken;
   if (new Date(token.expiresAt) < new Date()) {
     const refreshed = await refreshMLToken(token.refreshToken);
-    if (!refreshed.access_token) return { tenantId: tenant.id, error: "refresh_failed" };
+    if (!refreshed.access_token) return null;
     accessToken = refreshed.access_token;
     await db.update(mlTokens).set({
       accessToken: refreshed.access_token,
@@ -18,73 +21,11 @@ async function syncTenantPublicaciones(tenant: typeof tenants.$inferSelect, toke
       updatedAt: new Date(),
     }).where(eq(mlTokens.tenantId, tenant.id));
   }
-
-  // Get all item IDs for this seller
-  let itemIds: string[] = [];
-  let offset = 0;
-  while (true) {
-    const res = await fetch(
-      `https://api.mercadolibre.com/users/${tenant.mlUserId}/items/search?limit=100&offset=${offset}`,
-      { headers: { Authorization: `Bearer ${accessToken}` } }
-    );
-    const data = await res.json();
-    if (!data.results?.length) break;
-    itemIds = itemIds.concat(data.results);
-    if (itemIds.length >= (data.paging?.total || 0)) break;
-    offset += 100;
-  }
-
-  let synced = 0;
-
-  // Fetch item details in batches of 20
-  for (let i = 0; i < itemIds.length; i += 20) {
-    const batch = itemIds.slice(i, i + 20);
-    const res = await fetch(
-      `https://api.mercadolibre.com/items?ids=${batch.join(",")}`,
-      { headers: { Authorization: `Bearer ${accessToken}` } }
-    );
-    const data = await res.json();
-
-    if (Array.isArray(data)) {
-      for (const r of data) {
-        if (r.code !== 200 || !r.body) continue;
-        const item = r.body;
-        const skuAttr = (item.attributes || []).find((a: any) => a.id === "SELLER_SKU");
-        const sku = skuAttr?.value_name || item.seller_custom_field || "";
-        const freeShipping = !!item.shipping?.free_shipping;
-
-        try {
-          await db.insert(publicaciones).values({
-            tenantId: tenant.id,
-            itemId: item.id,
-            sku,
-            title: item.title || "",
-            thumbnail: item.thumbnail || "",
-            price: String(item.price || 0),
-            availableQuantity: item.available_quantity || 0,
-            status: item.status || "closed",
-            soldQuantity: item.sold_quantity || 0,
-            freeShipping,
-          }).onConflictDoUpdate({
-            target: [publicaciones.tenantId, publicaciones.itemId],
-            set: {
-              sku, title: item.title || "", thumbnail: item.thumbnail || "",
-              price: String(item.price || 0), availableQuantity: item.available_quantity || 0,
-              status: item.status || "closed", soldQuantity: item.sold_quantity || 0,
-              freeShipping,
-            },
-          });
-          synced++;
-        } catch (e) {
-          console.error("Insert publicacion error:", e);
-        }
-      }
-    }
-  }
-
-  return { tenantId: tenant.id, synced };
+  return accessToken;
 }
 
+// Each invocation: pick ONE tenant (round robin, least-recently-processed first),
+// process ONE batch of items for it, persist cursor. Fast — always under a few seconds.
 export async function GET(req: NextRequest) {
   const authHeader = req.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
@@ -93,15 +34,119 @@ export async function GET(req: NextRequest) {
 
   const activeTenants = await db.select().from(tenants)
     .where(or(eq(tenants.status, "trial"), eq(tenants.status, "active")));
+  const eligible = activeTenants.filter(t => t.mlUserId);
+  if (eligible.length === 0) return NextResponse.json({ ok: true, message: "No tenants" });
 
-  const results = [];
-  for (const tenant of activeTenants) {
-    if (!tenant.mlUserId) continue;
-    const [token] = await db.select().from(mlTokens).where(eq(mlTokens.tenantId, tenant.id));
-    if (!token) continue;
-    const result = await syncTenantPublicaciones(tenant, token);
-    results.push(result);
+  // Pick the tenant whose cursor was updated longest ago (or never)
+  const cursors = await db.select().from(syncCursors).where(eq(syncCursors.syncType, SYNC_TYPE));
+  const cursorByTenant = new Map(cursors.map(c => [c.tenantId, c]));
+
+  const sorted = [...eligible].sort((a, b) => {
+    const ca = cursorByTenant.get(a.id)?.updatedAt?.getTime() || 0;
+    const cb = cursorByTenant.get(b.id)?.updatedAt?.getTime() || 0;
+    return ca - cb;
+  });
+  const tenant = sorted[0];
+  const cursor = cursorByTenant.get(tenant.id);
+
+  const [token] = await db.select().from(mlTokens).where(eq(mlTokens.tenantId, tenant.id));
+  if (!token) return NextResponse.json({ ok: true, message: "No token" });
+
+  const accessToken = await getAccessToken(tenant, token);
+  if (!accessToken) return NextResponse.json({ ok: false, error: "refresh_failed" });
+
+  let itemIds: string[] = [];
+  const hasCache = cursor?.itemIds && cursor.itemIds !== "[]";
+
+  if (!hasCache) {
+    // No cached list yet — fetch just the FIRST page (100 items) to get started fast.
+    // A separate lightweight endpoint (refresh-item-list) completes the full list over time.
+    const res = await fetch(
+      `https://api.mercadolibre.com/users/${tenant.mlUserId}/items/search?limit=100&offset=0`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    const data = await res.json();
+    itemIds = data.results || [];
+
+    await db.insert(syncCursors).values({
+      tenantId: tenant.id,
+      syncType: SYNC_TYPE,
+      itemIds: JSON.stringify(itemIds),
+      cursorPosition: 0,
+      lastFullSync: itemIds.length < 100 ? new Date() : null, // only mark complete if this was the whole list
+      updatedAt: new Date(),
+    }).onConflictDoUpdate({
+      target: [syncCursors.tenantId, syncCursors.syncType],
+      set: { itemIds: JSON.stringify(itemIds), cursorPosition: 0, updatedAt: new Date() },
+    });
+  } else {
+    itemIds = JSON.parse(cursor!.itemIds || "[]");
   }
 
-  return NextResponse.json({ ok: true, synced: results });
+  if (itemIds.length === 0) {
+    return NextResponse.json({ ok: true, tenantId: tenant.id, synced: 0, total: 0 });
+  }
+
+  let position = cursor?.cursorPosition || 0;
+  if (position >= itemIds.length) position = 0; // wrap around, start a new full pass
+
+  const batch = itemIds.slice(position, position + BATCH_SIZE);
+  const nextPosition = position + BATCH_SIZE;
+
+  let synced = 0;
+  const res = await fetch(
+    `https://api.mercadolibre.com/items?ids=${batch.join(",")}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  const data = await res.json();
+
+  if (Array.isArray(data)) {
+    for (const r of data) {
+      if (r.code !== 200 || !r.body) continue;
+      const item = r.body;
+      const skuAttr = (item.attributes || []).find((a: any) => a.id === "SELLER_SKU");
+      const sku = skuAttr?.value_name || item.seller_custom_field || "";
+      const freeShipping = !!item.shipping?.free_shipping;
+
+      try {
+        await db.insert(publicaciones).values({
+          tenantId: tenant.id,
+          itemId: item.id,
+          sku,
+          title: item.title || "",
+          thumbnail: item.thumbnail || "",
+          price: String(item.price || 0),
+          availableQuantity: item.available_quantity || 0,
+          status: item.status || "closed",
+          soldQuantity: item.sold_quantity || 0,
+          freeShipping,
+        }).onConflictDoUpdate({
+          target: [publicaciones.tenantId, publicaciones.itemId],
+          set: {
+            sku, title: item.title || "", thumbnail: item.thumbnail || "",
+            price: String(item.price || 0), availableQuantity: item.available_quantity || 0,
+            status: item.status || "closed", soldQuantity: item.sold_quantity || 0,
+            freeShipping,
+          },
+        });
+        synced++;
+      } catch (e) {
+        console.error("Insert publicacion error:", e);
+      }
+    }
+  }
+
+  await db.update(syncCursors).set({
+    cursorPosition: nextPosition,
+    updatedAt: new Date(),
+  }).where(and(eq(syncCursors.tenantId, tenant.id), eq(syncCursors.syncType, SYNC_TYPE)));
+
+  return NextResponse.json({
+    ok: true,
+    tenantId: tenant.id,
+    synced,
+    position,
+    nextPosition,
+    totalItems: itemIds.length,
+  });
 }
