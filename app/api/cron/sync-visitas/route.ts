@@ -53,15 +53,21 @@ export async function GET(req: NextRequest) {
 
   if (pubs.length === 0) return NextResponse.json({ ok: true, tenantId: tenant.id, message: "No active items" });
 
+  // ML rechaza el formato de toISOString() ("...T00:00:00.000Z" con millis)
+  // con 400 "unknown date format". Espera fecha simple YYYY-MM-DD.
+  function ymd(d: Date) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+
   const now = new Date();
   const curKey  = monthKey(now);
   const prevDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
   const prevKey = monthKey(prevDate);
 
-  const dateFromCur = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-  const dateToCur   = now.toISOString();
-  const dateFromPrev = new Date(prevDate.getFullYear(), prevDate.getMonth(), 1).toISOString();
-  const dateToPrev   = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59).toISOString();
+  const dateFromCur  = ymd(new Date(now.getFullYear(), now.getMonth(), 1));
+  const dateToCur    = ymd(now);
+  const dateFromPrev = ymd(new Date(prevDate.getFullYear(), prevDate.getMonth(), 1));
+  const dateToPrev   = ymd(new Date(now.getFullYear(), now.getMonth(), 0));
 
   const ids = pubs.map(p => p.itemId).join(",");
 
@@ -73,7 +79,11 @@ export async function GET(req: NextRequest) {
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
     const dataCur = await resCur.json();
-    if (Array.isArray(dataCur)) totalCur = dataCur.reduce((s: number, r: any) => s + (r.total_visits || 0), 0);
+    if (Array.isArray(dataCur)) {
+      totalCur = dataCur.reduce((s: number, r: any) => s + (r.total_visits || 0), 0);
+    } else {
+      console.error("Visits cur: respuesta inesperada de ML", resCur.status, JSON.stringify(dataCur));
+    }
   } catch (e) { console.error("Visits cur error:", e); }
 
   try {
@@ -82,7 +92,11 @@ export async function GET(req: NextRequest) {
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
     const dataPrev = await resPrev.json();
-    if (Array.isArray(dataPrev)) totalPrev = dataPrev.reduce((s: number, r: any) => s + (r.total_visits || 0), 0);
+    if (Array.isArray(dataPrev)) {
+      totalPrev = dataPrev.reduce((s: number, r: any) => s + (r.total_visits || 0), 0);
+    } else {
+      console.error("Visits prev: respuesta inesperada de ML", resPrev.status, JSON.stringify(dataPrev));
+    }
   } catch (e) { console.error("Visits prev error:", e); }
 
   await db.insert(visitasMensuales).values({
