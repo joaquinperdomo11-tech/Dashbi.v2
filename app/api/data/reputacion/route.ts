@@ -45,9 +45,11 @@ export async function GET() {
   return NextResponse.json({
     storeName: rep?.storeName || tenant.nombre || "",
     levelId: rep?.levelId || "",
-    claims: { rate: Number(rep?.claimsRate || 0), limit: Number(rep?.claimsLimit || 1.5) },
-    cancellations: { rate: Number(rep?.cancellationsRate || 0), limit: Number(rep?.cancellationsLimit || 1.0) },
-    delayed: { rate: Number(rep?.delayedRate || 0), limit: Number(rep?.delayedLimit || 10.0) },
+    // claimsRate/cancellationsRate/delayedRate se guardan como decimal (ML: 0.0028 = 0.28%),
+    // acá se convierten a escala de porcentaje para el frontend.
+    claims: { rate: Number(rep?.claimsRate || 0) * 100, limit: Number(rep?.claimsLimit) || 2.5 },
+    cancellations: { rate: Number(rep?.cancellationsRate || 0) * 100, limit: Number(rep?.cancellationsLimit) || 1.5 },
+    delayed: { rate: Number(rep?.delayedRate || 0) * 100, limit: Number(rep?.delayedLimit) || 10.0 },
     visitas: {
       current: visitasCur,
       previous: visitasPrev,

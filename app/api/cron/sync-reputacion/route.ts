@@ -46,30 +46,35 @@ export async function GET(req: NextRequest) {
       const rep = data.seller_reputation || {};
       const metrics = rep.metrics || {};
 
-      await db.insert(reputacion).values({
-        tenantId: tenant.id,
+      // ML no devuelve el umbral (`value_limit`) por API: son límites públicos
+      // fijos por país. Para MLU (Uruguay), MercadoLíder tiene umbrales más
+      // exigentes que un vendedor común. power_seller_status viene poblado
+      // ("bronze"/"silver"/"gold"/"platinum") solo si el vendedor es MercadoLíder.
+      const isMercadoLider = !!rep.power_seller_status;
+      const limits = isMercadoLider
+        ? { claims: 2.5, cancellations: 1.5, delayed: 10.0 }
+        : { claims: 3.5, cancellations: 2.5, delayed: 12.0 };
+
+      // rate viene como decimal (0.0028 = 0.28%) — lo guardamos tal cual;
+      // la conversión a porcentaje se hace al servir los datos al frontend.
+      const values = {
         storeName: data.nickname || "",
         levelId: rep.level_id || "",
-        claimsRate: String(metrics.claims?.rate || 0),
-        claimsLimit: String(metrics.claims?.value_limit || 0),
-        cancellationsRate: String(metrics.cancellations?.rate || 0),
-        cancellationsLimit: String(metrics.cancellations?.value_limit || 0),
-        delayedRate: String(metrics.delayed_handling_time?.rate || 0),
-        delayedLimit: String(metrics.delayed_handling_time?.value_limit || 0),
+        claimsRate: String(metrics.claims?.rate ?? 0),
+        claimsLimit: String(limits.claims),
+        cancellationsRate: String(metrics.cancellations?.rate ?? 0),
+        cancellationsLimit: String(limits.cancellations),
+        delayedRate: String(metrics.delayed_handling_time?.rate ?? 0),
+        delayedLimit: String(limits.delayed),
         updatedAt: new Date(),
+      };
+
+      await db.insert(reputacion).values({
+        tenantId: tenant.id,
+        ...values,
       }).onConflictDoUpdate({
         target: reputacion.tenantId,
-        set: {
-          storeName: data.nickname || "",
-          levelId: rep.level_id || "",
-          claimsRate: String(metrics.claims?.rate || 0),
-          claimsLimit: String(metrics.claims?.value_limit || 0),
-          cancellationsRate: String(metrics.cancellations?.rate || 0),
-          cancellationsLimit: String(metrics.cancellations?.value_limit || 0),
-          delayedRate: String(metrics.delayed_handling_time?.rate || 0),
-          delayedLimit: String(metrics.delayed_handling_time?.value_limit || 0),
-          updatedAt: new Date(),
-        },
+        set: values,
       });
       results.push({ tenantId: tenant.id, ok: true });
     } catch (e) {
