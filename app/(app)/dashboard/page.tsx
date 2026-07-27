@@ -9,6 +9,7 @@ import MonthlyChart from "@/app/components/MonthlyChart";
 import WaterfallChart from "@/app/components/WaterfallChart";
 import TodaySnapshot from "@/app/components/TodaySnapshot";
 import TopProductosResumen from "@/app/components/TopProductosResumen";
+import VisitasConversionChart from "@/app/components/VisitasConversionChart";
 
 function Skeleton({ className }: { className: string }) {
   return <div className={`skeleton ${className}`} />;
@@ -68,6 +69,10 @@ export default function DashboardPage() {
   const [tenant, setTenant]       = useState<any>(null);
   const [data, setData]           = useState<DashboardData | null>(null);
   const [reputacion, setReputacion] = useState<ReputacionData | null>(null);
+  const [visitasDiarias, setVisitasDiarias] = useState<{
+    current: { monthKey: string; days: any[] };
+    previous: { monthKey: string; days: any[] };
+  } | null>(null);
   const [tenantLoading, setTenantLoading] = useState(true);
   const [dataLoading, setDataLoading]     = useState(false);
   const [enriching, setEnriching] = useState(false);
@@ -89,15 +94,17 @@ export default function DashboardPage() {
   const fetchDashboardData = useCallback(async () => {
     setDataLoading(true);
     try {
-      const [res, repRes] = await Promise.all([
+      const [res, repRes, visitasRes] = await Promise.all([
         fetch("/api/data/dashboard"),
         fetch("/api/data/reputacion"),
+        fetch("/api/data/visitas-diarias"),
       ]);
       if (!res.ok) throw new Error("fetch failed");
       const json = await res.json();
       setData(json);
       setLastUpdated(new Date());
       if (repRes.ok) setReputacion(await repRes.json());
+      if (visitasRes.ok) setVisitasDiarias(await visitasRes.json());
     } catch (e) {
       console.error(e);
     } finally {
@@ -312,6 +319,11 @@ export default function DashboardPage() {
                     <p style={{fontSize:22,fontWeight:700,color:"var(--sub)"}}>{pctFmt(reputacion.visitas.conversionPrevious)}</p>
                   </div>
                 </div>
+                {visitasDiarias && (
+                  <div style={{marginTop:16}}>
+                    <VisitasConversionChart current={visitasDiarias.current} previous={visitasDiarias.previous} />
+                  </div>
+                )}
               </section>
             )}
 

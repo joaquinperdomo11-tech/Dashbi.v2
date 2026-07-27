@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { tenants, mlTokens, publicaciones, visitasMensuales } from "@/lib/db/schema";
-import { eq, or, and, sql } from "drizzle-orm";
+import { tenants, mlTokens, visitasMensuales, visitasDiarias } from "@/lib/db/schema";
+import { eq, or } from "drizzle-orm";
 import { refreshMLToken } from "@/lib/ml";
 
 async function getAccessToken(tenant: typeof tenants.$inferSelect, token: typeof mlTokens.$inferSelect) {
@@ -20,12 +20,16 @@ async function getAccessToken(tenant: typeof tenants.$inferSelect, token: typeof
   return accessToken;
 }
 
-function monthKey(d: Date) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+function monthKey(dateStr: string) {
+  // dateStr viene como "YYYY-MM-DD..."
+  return dateStr.slice(0, 7);
 }
 
-// One tenant per invocation (rotating), fetches visits for a batch of items via
-// the multiget endpoint (up to 50 ids per call — single fast request).
+// One tenant per invocation (rotating). Usa /users/{id}/items_visits/time_window,
+// que trae el desglose DIARIO de visitas en un solo llamado (results: [{date, total}]).
+// Reemplaza al enfoque anterior con /items/visits?ids=..., que solo acepta 1 id
+// por vez ("maximum amount of items to query is 1") y no servía para totales
+// agregados de cuenta ni para desglose diario.
 export async function GET(req: NextRequest) {
   const authHeader = req.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
@@ -46,58 +50,48 @@ export async function GET(req: NextRequest) {
   const accessToken = await getAccessToken(tenant, token);
   if (!accessToken) return NextResponse.json({ ok: false, error: "refresh_failed" });
 
-  const pubs = await db.select({ itemId: publicaciones.itemId })
-    .from(publicaciones)
-    .where(and(eq(publicaciones.tenantId, tenant.id), eq(publicaciones.status, "active")))
-    .limit(50);
+  // last=65 cubre con margen el mes actual completo + el mes anterior completo
+  // (peor caso: dos meses de 31 días = 62), en un solo llamado.
+  const url = `https://api.mercadolibre.com/users/${tenant.mlUserId}/items_visits/time_window?last=65&unit=day`;
 
-  if (pubs.length === 0) return NextResponse.json({ ok: true, tenantId: tenant.id, message: "No active items" });
-
-  // ML rechaza el formato de toISOString() ("...T00:00:00.000Z" con millis)
-  // con 400 "unknown date format". Espera fecha simple YYYY-MM-DD.
-  function ymd(d: Date) {
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  let results: Array<{ date: string; total: number }> = [];
+  try {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    const data = await res.json();
+    if (res.ok && Array.isArray(data.results)) {
+      results = data.results;
+    } else {
+      console.error("Visits time_window: respuesta inesperada de ML", res.status, JSON.stringify(data));
+      return NextResponse.json({ ok: false, tenantId: tenant.id, error: "ml_bad_response", body: data });
+    }
+  } catch (e) {
+    console.error("Visits time_window fetch error:", e);
+    return NextResponse.json({ ok: false, tenantId: tenant.id, error: "fetch_failed" });
   }
 
+  // Guardar cada día. ML devuelve "date" como ISO datetime (ej "2026-07-08T00:00:00Z"),
+  // lo normalizamos a YYYY-MM-DD.
+  let daysWritten = 0;
+  for (const r of results) {
+    const fecha = String(r.date).slice(0, 10);
+    await db.insert(visitasDiarias).values({
+      tenantId: tenant.id, fecha, totalVisitas: r.total || 0, updatedAt: new Date(),
+    }).onConflictDoUpdate({
+      target: [visitasDiarias.tenantId, visitasDiarias.fecha],
+      set: { totalVisitas: r.total || 0, updatedAt: new Date() },
+    });
+    daysWritten++;
+  }
+
+  // Derivar totales mensuales (mes actual y anterior) sumando los días ya
+  // obtenidos, sin llamadas extra a la API de ML.
   const now = new Date();
-  const curKey  = monthKey(now);
+  const curKey  = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   const prevDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  const prevKey = monthKey(prevDate);
+  const prevKey = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, "0")}`;
 
-  const dateFromCur  = ymd(new Date(now.getFullYear(), now.getMonth(), 1));
-  const dateToCur    = ymd(now);
-  const dateFromPrev = ymd(new Date(prevDate.getFullYear(), prevDate.getMonth(), 1));
-  const dateToPrev   = ymd(new Date(now.getFullYear(), now.getMonth(), 0));
-
-  const ids = pubs.map(p => p.itemId).join(",");
-
-  let totalCur = 0, totalPrev = 0;
-
-  try {
-    const resCur = await fetch(
-      `https://api.mercadolibre.com/items/visits?ids=${ids}&date_from=${dateFromCur}&date_to=${dateToCur}`,
-      { headers: { Authorization: `Bearer ${accessToken}` } }
-    );
-    const dataCur = await resCur.json();
-    if (Array.isArray(dataCur)) {
-      totalCur = dataCur.reduce((s: number, r: any) => s + (r.total_visits || 0), 0);
-    } else {
-      console.error("Visits cur: respuesta inesperada de ML", resCur.status, JSON.stringify(dataCur));
-    }
-  } catch (e) { console.error("Visits cur error:", e); }
-
-  try {
-    const resPrev = await fetch(
-      `https://api.mercadolibre.com/items/visits?ids=${ids}&date_from=${dateFromPrev}&date_to=${dateToPrev}`,
-      { headers: { Authorization: `Bearer ${accessToken}` } }
-    );
-    const dataPrev = await resPrev.json();
-    if (Array.isArray(dataPrev)) {
-      totalPrev = dataPrev.reduce((s: number, r: any) => s + (r.total_visits || 0), 0);
-    } else {
-      console.error("Visits prev: respuesta inesperada de ML", resPrev.status, JSON.stringify(dataPrev));
-    }
-  } catch (e) { console.error("Visits prev error:", e); }
+  const totalCur  = results.filter(r => monthKey(String(r.date)) === curKey).reduce((s, r) => s + (r.total || 0), 0);
+  const totalPrev = results.filter(r => monthKey(String(r.date)) === prevKey).reduce((s, r) => s + (r.total || 0), 0);
 
   await db.insert(visitasMensuales).values({
     tenantId: tenant.id, monthKey: curKey, totalVisitas: totalCur, updatedAt: new Date(),
@@ -113,5 +107,5 @@ export async function GET(req: NextRequest) {
     set: { totalVisitas: totalPrev, updatedAt: new Date() },
   });
 
-  return NextResponse.json({ ok: true, tenantId: tenant.id, curKey, totalCur, prevKey, totalPrev, itemsChecked: pubs.length });
+  return NextResponse.json({ ok: true, tenantId: tenant.id, daysWritten, curKey, totalCur, prevKey, totalPrev });
 }

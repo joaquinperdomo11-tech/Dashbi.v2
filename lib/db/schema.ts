@@ -128,3 +128,14 @@ export const visitasMensuales = pgTable("visitas_mensuales", {
 }, (table) => ({
   tenantMonthUnique: uniqueIndex("tenant_month_unique").on(table.tenantId, table.monthKey),
 }));
+
+export const visitasDiarias = pgTable("visitas_diarias", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
+  fecha: text("fecha").notNull(), // YYYY-MM-DD
+  totalVisitas: integer("total_visitas").default(0),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  tenantFechaUnique: uniqueIndex("tenant_fecha_unique").on(table.tenantId, table.fecha),
+}));
+
