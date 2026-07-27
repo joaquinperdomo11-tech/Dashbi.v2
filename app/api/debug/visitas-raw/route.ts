@@ -31,8 +31,11 @@ export async function GET() {
     .limit(5);
 
   const now = new Date();
-  const dateFrom = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-  const dateTo = now.toISOString();
+  function ymd(d: Date) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+  const dateFrom = ymd(new Date(now.getFullYear(), now.getMonth(), 1));
+  const dateTo = ymd(now);
 
   const diagnostics: any = {
     tenantId: tenant.id,
