@@ -60,6 +60,9 @@ export const publicaciones = pgTable("publicaciones", {
   status: text("status"),
   soldQuantity: integer("sold_quantity"),
   freeShipping: boolean("free_shipping").default(false),
+  // Nuevo (feature Productos v2): categoría traída directamente de ML, solo lectura.
+  categoryId: text("category_id"),
+  categoryName: text("category_name"),
 }, (table) => ({
   tenantItemUnique: uniqueIndex("tenant_item_unique").on(table.tenantId, table.itemId),
 }));
@@ -73,6 +76,32 @@ export const costos = pgTable("costos", {
 }, (table) => ({
   tenantSkuUnique: uniqueIndex("tenant_sku_unique").on(table.tenantId, table.sku),
 }));
+
+// Nuevo (feature Productos v2): combos.
+// Un combo es una publicación real de ML (identificada por su propio SKU) que,
+// al venderse, "representa" la venta conjunta de otros SKUs propios (componentes).
+// Por ahora esto es solo metadata de configuración (la receta) — el stock de cada
+// componente se sigue leyendo 100% de `publicaciones.availableQuantity` (ML), y el
+// stock disponible del combo se CALCULA al vuelo (min entre componentes / cantidad).
+// No se escribe ni resta stock en ningún lado todavía (eso queda para una próxima
+// iteración: leer la venta del combo vía sync de órdenes y escribir el descuento).
+export const combos = pgTable("combos", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
+  comboSku: text("combo_sku").notNull(), // SKU de la publicación de ML que es el combo
+  nombre: text("nombre"), // opcional, override de nombre descriptivo
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  tenantComboSkuUnique: uniqueIndex("tenant_combo_sku_unique").on(table.tenantId, table.comboSku),
+}));
+
+export const comboComponentes = pgTable("combo_componentes", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  comboId: integer("combo_id").references(() => combos.id, { onDelete: "cascade" }).notNull(),
+  componentSku: text("component_sku").notNull(), // SKU propio (publicaciones.sku)
+  cantidad: integer("cantidad").notNull().default(1),
+});
 
 export const preguntas = pgTable("preguntas", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
@@ -138,4 +167,3 @@ export const visitasDiarias = pgTable("visitas_diarias", {
 }, (table) => ({
   tenantFechaUnique: uniqueIndex("tenant_fecha_unique").on(table.tenantId, table.fecha),
 }));
-

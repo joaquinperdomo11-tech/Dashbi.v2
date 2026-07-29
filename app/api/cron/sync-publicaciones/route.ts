@@ -24,6 +24,23 @@ async function getAccessToken(tenant: typeof tenants.$inferSelect, token: typeof
   return accessToken;
 }
 
+// Resuelve category_id -> nombre legible. Endpoint público de ML (no requiere auth).
+// Se llama solo para los category_ids únicos presentes en el batch actual (normalmente
+// muy pocos, muchos items comparten categoría), así que no agrega loops largos.
+async function resolveCategoryNames(categoryIds: string[]): Promise<Map<string, string>> {
+  const names = new Map<string, string>();
+  await Promise.all(categoryIds.map(async (catId) => {
+    try {
+      const res = await fetch(`https://api.mercadolibre.com/categories/${catId}`);
+      const data = await res.json();
+      if (data?.name) names.set(catId, data.name);
+    } catch (e) {
+      console.error("Error fetching category name:", catId, e);
+    }
+  }));
+  return names;
+}
+
 // Each invocation: pick ONE tenant (round robin, least-recently-processed first),
 // process ONE batch of items for it, persist cursor. Fast — always under a few seconds.
 export async function GET(req: NextRequest) {
@@ -101,12 +118,23 @@ export async function GET(req: NextRequest) {
   const data = await res.json();
 
   if (Array.isArray(data)) {
+    // Resolver category_id -> category_name para los IDs únicos de este batch,
+    // así evitamos un fetch por item (muchos items suelen compartir categoría).
+    const categoryIds = Array.from(new Set(
+      data
+        .filter((r: any) => r.code === 200 && r.body?.category_id)
+        .map((r: any) => r.body.category_id as string)
+    ));
+    const categoryNames = await resolveCategoryNames(categoryIds);
+
     for (const r of data) {
       if (r.code !== 200 || !r.body) continue;
       const item = r.body;
       const skuAttr = (item.attributes || []).find((a: any) => a.id === "SELLER_SKU");
       const sku = skuAttr?.value_name || item.seller_custom_field || "";
       const freeShipping = !!item.shipping?.free_shipping;
+      const categoryId = item.category_id || "";
+      const categoryName = categoryId ? (categoryNames.get(categoryId) || "") : "";
 
       try {
         await db.insert(publicaciones).values({
@@ -120,13 +148,15 @@ export async function GET(req: NextRequest) {
           status: item.status || "closed",
           soldQuantity: item.sold_quantity || 0,
           freeShipping,
+          categoryId,
+          categoryName,
         }).onConflictDoUpdate({
           target: [publicaciones.tenantId, publicaciones.itemId],
           set: {
             sku, title: item.title || "", thumbnail: item.thumbnail || "",
             price: String(item.price || 0), availableQuantity: item.available_quantity || 0,
             status: item.status || "closed", soldQuantity: item.sold_quantity || 0,
-            freeShipping,
+            freeShipping, categoryId, categoryName,
           },
         });
         synced++;
