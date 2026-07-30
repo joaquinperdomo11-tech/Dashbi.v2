@@ -26,7 +26,6 @@ export async function GET() {
       .where(eq(combos.tenantId, tenant.id)),
   ]);
 
-  // Aggregate historical units sold by SKU
   const ventasPorSku: Record<string, number> = {};
   rawOrders.forEach(o => {
     if (o.estado === "cancelled" || !o.sku) return;
@@ -36,18 +35,15 @@ export async function GET() {
   const costosMap: Record<string, string> = {};
   rawCostos.forEach(c => { if (c.sku) costosMap[c.sku] = c.costoSinIva; });
 
-  // Group publicaciones by SKU — dedupe catalog duplicates (same SKU, multiple item_ids)
   const bySku = new Map<string, typeof rawPubs[number]>();
   rawPubs.forEach(p => {
-    const key = p.sku || `__no_sku_${p.itemId}`; // items without SKU stay separate
+    const key = p.sku || `__no_sku_${p.itemId}`;
     const existing = bySku.get(key);
-    // Prefer active listings, otherwise keep first seen
     if (!existing || (p.status === "active" && existing.status !== "active")) {
       bySku.set(key, p);
     }
   });
 
-  // Recetas de combos, indexadas por SKU del combo y por combo.id
   const comboBySku = new Map<string, typeof rawCombos[number]>();
   rawCombos.forEach(c => comboBySku.set(c.comboSku, c));
   const componentesByComboId = new Map<number, { componentSku: string; cantidad: number }[]>();
@@ -57,8 +53,6 @@ export async function GET() {
     componentesByComboId.set(cc.comboId, list);
   });
 
-  // Stock actual (de ML, solo lectura) por SKU individual — usado para calcular
-  // el "stock disponible" de cada combo en base a sus componentes.
   const stockPorSku: Record<string, number> = {};
   bySku.forEach((p, sku) => { stockPorSku[sku] = p.availableQuantity || 0; });
 
@@ -75,9 +69,6 @@ export async function GET() {
         cantidad: r.cantidad,
         stockDisponible: stockPorSku[r.componentSku] ?? 0,
       }));
-      // Stock disponible del combo = mínimo, entre todos los componentes, de
-      // cuántos combos completos se pueden armar con el stock actual de cada uno.
-      // Calculado al vuelo, nunca persistido ni descontado (solo lectura).
       stockCombo = componentes.length > 0
         ? Math.min(...componentes.map(c => Math.floor(c.stockDisponible / (c.cantidad || 1))))
         : 0;
@@ -91,7 +82,6 @@ export async function GET() {
       price: Number(p.price) || 0,
       availableQuantity: p.availableQuantity || 0,
       status: p.status || "closed",
-      freeShipping: !!p.freeShipping,
       categoryId: p.categoryId || "",
       categoryName: p.categoryName || "",
       ventasHistoricas: ventasPorSku[sku] || 0,
@@ -99,19 +89,20 @@ export async function GET() {
       isCombo,
       componentes,
       stockCombo,
+      // Promoción activa en ML (solo lectura, sync 1x/día)
+      promoActiva: !!p.promoActiva,
+      promoTipo: p.promoTipo || "",
+      promoPrecio: p.promoPrecio ? Number(p.promoPrecio) : null,
+      promoHasta: p.promoHasta ? p.promoHasta.toISOString() : null,
     };
   }).sort((a, b) => b.ventasHistoricas - a.ventasHistoricas);
 
-  // ── Cards ──
   const activos = productos.filter(p => p.status === "active");
   const cantidadActivos = activos.length;
   const cantidadTotal = productos.length;
   const cantidadCombos = productos.filter(p => p.isCombo).length;
   const cantidadIndividuales = cantidadTotal - cantidadCombos;
 
-  // Costo del stock: sobre TODO lo que tiene costo cargado, activo o no.
-  // Para combos usamos el stock calculado (min de componentes); para
-  // publicaciones individuales, el stock de ML.
   const costoStock = productos.reduce((sum, p) => {
     const costo = parseFloat(p.costoSinIva || "0");
     if (!costo) return sum;
@@ -119,7 +110,6 @@ export async function GET() {
     return sum + costo * stock;
   }, 0);
 
-  // Precio de venta promedio: simple, sobre publicaciones activas con precio.
   const preciosActivos = activos.filter(p => p.price > 0).map(p => p.price);
   const precioPromedio = preciosActivos.length > 0
     ? preciosActivos.reduce((s, p) => s + p, 0) / preciosActivos.length

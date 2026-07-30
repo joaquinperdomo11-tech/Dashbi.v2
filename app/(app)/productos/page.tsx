@@ -17,7 +17,6 @@ interface Producto {
   price: number;
   availableQuantity: number;
   status: string;
-  freeShipping: boolean;
   categoryId: string;
   categoryName: string;
   ventasHistoricas: number;
@@ -25,6 +24,10 @@ interface Producto {
   isCombo: boolean;
   componentes: ComboComponente[];
   stockCombo: number | null;
+  promoActiva: boolean;
+  promoTipo: string;
+  promoPrecio: number | null;
+  promoHasta: string | null;
 }
 
 interface Cards {
@@ -51,6 +54,12 @@ const ESTADO_COLORS: Record<string, string> = {
 };
 
 function fmt(n: number) { return "$" + Math.round(n).toLocaleString("es-UY"); }
+
+function fmtFecha(iso: string | null) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return d.toLocaleDateString("es-UY", { day: "2-digit", month: "2-digit", year: "2-digit" });
+}
 
 function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
@@ -264,7 +273,7 @@ export default function ProductosPage() {
             <table style={{width:"100%",borderCollapse:"collapse",minWidth:1000}}>
               <thead>
                 <tr style={{background:"var(--bg)",borderBottom:"1px solid var(--border)"}}>
-                  {["","Producto / SKU","Categoría","Precio","Stock","Vendidas","Envío gratis","Estado","Costo sin IVA"].map(h => (
+                  {["","Producto / SKU","Categoría","Precio","Stock","Vendidas","Promoción","Estado","Costo sin IVA"].map(h => (
                     <th key={h} style={{padding:"10px 14px",textAlign:"left",fontSize:10,color:"var(--sub)",fontFamily:"'DM Mono',monospace",textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
                   ))}
                 </tr>
@@ -305,7 +314,23 @@ export default function ProductosPage() {
                       ) : p.availableQuantity}
                     </td>
                     <td style={{padding:"8px 14px",fontSize:13,fontFamily:"'DM Mono',monospace",color:"var(--sub)"}}>{p.ventasHistoricas}</td>
-                    <td style={{padding:"8px 14px",fontSize:13}}>{p.freeShipping ? "✓" : "✗"}</td>
+                    <td style={{padding:"8px 14px",fontSize:12}}>
+                      {p.promoActiva ? (
+                        <div>
+                          <span style={{padding:"2px 6px",borderRadius:100,background:"var(--green-bg, rgba(34,197,94,0.15))",color:"var(--green)",fontSize:10,fontFamily:"'DM Mono',monospace"}}>
+                            {p.promoTipo || "PROMO"}
+                          </span>
+                          {p.promoPrecio != null && (
+                            <p style={{fontSize:11,color:"var(--text)",marginTop:3,fontFamily:"'DM Mono',monospace"}}>{fmt(p.promoPrecio)}</p>
+                          )}
+                          {p.promoHasta && (
+                            <p style={{fontSize:10,color:"var(--sub)",marginTop:1}}>hasta {fmtFecha(p.promoHasta)}</p>
+                          )}
+                        </div>
+                      ) : (
+                        <span style={{color:"var(--sub)"}}>—</span>
+                      )}
+                    </td>
                     <td style={{padding:"8px 14px"}}>
                       <span style={{fontSize:12,color: ESTADO_COLORS[p.status] || "var(--sub)"}}>{ESTADO_LABELS[p.status] || p.status}</span>
                     </td>
