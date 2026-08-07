@@ -154,29 +154,60 @@ export async function GET() {
     return NextResponse.json(result);
   }
 
-  result.campaignsUrl = campaignsUrl;
-  result.campaignsStatus = campaignsRes.status;
-  result.campaignsData = await campaignsRes.json().catch(() => null);
+  result.campaignsDailyUrl = campaignsUrl;
+  result.campaignsDailyStatus = campaignsRes.status;
+  result.campaignsDailyData = await campaignsRes.json().catch(() => null);
+  // ^ Esto ya lo confirmamos: con aggregation_type=DAILY, ML agrega TODA la
+  // cuenta por día (no separa por campaña ni por producto). Sirve para un
+  // gráfico de evolución diaria, pero no para recomendaciones por campaña/SKU.
 
-  // 3. Si la muestra con métricas + fechas falla, reintentar sin esos params
-  // para aislar si el problema es el endpoint en sí o algún parámetro puntual.
-  if (!campaignsRes.ok) {
-    const fallbackUrl =
-      `https://api.mercadolibre.com/marketplace/advertising/${siteId}/advertisers/${advertiserId}/product_ads/campaigns/search` +
-      `?limit=5&offset=0`;
-    try {
-      const fallbackRes = await fetch(fallbackUrl, {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Api-Version": "2",
-        },
-      });
-      result.fallbackUrl = fallbackUrl;
-      result.fallbackStatus = fallbackRes.status;
-      result.fallbackData = await fallbackRes.json().catch(() => null);
-    } catch (e) {
-      result.fallbackError = String(e);
-    }
+  // 3. aggregation_type=CAMPAIGN — para ver si esto sí desglosa por campaña
+  // individual (con campaign_id) en vez de agregar toda la cuenta.
+  const campaignAggUrl =
+    `https://api.mercadolibre.com/marketplace/advertising/${siteId}/advertisers/${advertiserId}/product_ads/campaigns/search` +
+    `?limit=10&offset=0&date_from=${fmt(hace7)}&date_to=${fmt(hoy)}&metrics=${metrics}&aggregation_type=CAMPAIGN`;
+  try {
+    const r = await fetch(campaignAggUrl, {
+      headers: { Authorization: `Bearer ${accessToken}`, "Api-Version": "2" },
+    });
+    result.campaignsByCampaignUrl = campaignAggUrl;
+    result.campaignsByCampaignStatus = r.status;
+    result.campaignsByCampaignData = await r.json().catch(() => null);
+  } catch (e) {
+    result.campaignsByCampaignError = String(e);
+  }
+
+  // 4. Metadata de campañas SIN fechas/métricas — para ver si trae
+  // name/status/acos_target/budget/strategy por campaña (metadata pura).
+  const metadataUrl =
+    `https://api.mercadolibre.com/marketplace/advertising/${siteId}/advertisers/${advertiserId}/product_ads/campaigns/search` +
+    `?limit=10&offset=0`;
+  try {
+    const r = await fetch(metadataUrl, {
+      headers: { Authorization: `Bearer ${accessToken}`, "Api-Version": "2" },
+    });
+    result.campaignsMetadataUrl = metadataUrl;
+    result.campaignsMetadataStatus = r.status;
+    result.campaignsMetadataData = await r.json().catch(() => null);
+  } catch (e) {
+    result.campaignsMetadataError = String(e);
+  }
+
+  // 5. Endpoint de ítems/anuncios — para el desglose por producto/SKU,
+  // clave para cruzar con margen real. Probamos la ruta migrada equivalente
+  // a la de campañas (con /search bajo /marketplace/advertising/{site_id}/...).
+  const itemsUrl =
+    `https://api.mercadolibre.com/marketplace/advertising/${siteId}/advertisers/${advertiserId}/product_ads/items/search` +
+    `?limit=10&offset=0&date_from=${fmt(hace7)}&date_to=${fmt(hoy)}&metrics=${metrics}`;
+  try {
+    const r = await fetch(itemsUrl, {
+      headers: { Authorization: `Bearer ${accessToken}`, "Api-Version": "2" },
+    });
+    result.itemsUrl = itemsUrl;
+    result.itemsStatus = r.status;
+    result.itemsData = await r.json().catch(() => null);
+  } catch (e) {
+    result.itemsError = String(e);
   }
 
   return NextResponse.json(result);
