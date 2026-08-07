@@ -18,7 +18,11 @@ export type RecomendacionFinal = {
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
 const GEMINI_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent";
+// Se usa el alias "gemini-flash-latest" (en vez de fijar una versión como
+// "gemini-2.0-flash") porque Google retira modelos viejos del free tier
+// sin aviso (gemini-2.0-flash se retiró el 31/03/2026) — el alias siempre
+// apunta al Flash vigente, evitando que esto se rompa de nuevo más adelante.
 
 function construirPrompt(candidatos: Candidato[], nombreTienda: string): string {
   return `Sos un analista de Mercado Ads (Product Ads) para el vendedor "${nombreTienda}" en Mercado Libre Uruguay.
