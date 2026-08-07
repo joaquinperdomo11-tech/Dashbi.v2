@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { tenants, mlTokens, adsCampaigns, adsItemsSnapshot } from "@/lib/db/schema";
-import { eq, sql } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { refreshMLToken } from "@/lib/ml";
 import { resolverAdvertiser } from "@/lib/adsAdvertiser";
 
@@ -50,14 +50,33 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const [campaña] = await db
+  try {
+    return await syncAdsItems();
+  } catch (e) {
+    console.error("sync-ads-items falló:", e);
+    return NextResponse.json({ ok: false, error: "unexpected_error", detail: String(e) }, { status: 500 });
+  }
+}
+
+async function syncAdsItems() {
+  // Trae todas las campañas activas y elige en JS la menos-recientemente-
+  // sincronizada (nunca sincronizada = primera). Se evita un ORDER BY con
+  // SQL crudo acá — causaba un error de tipos con el driver de Neon.
+  const campañasActivas = await db
     .select()
     .from(adsCampaigns)
-    .where(eq(adsCampaigns.status, "active"))
-    .orderBy(sql`${adsCampaigns.itemsLastSyncedAt} ASC NULLS FIRST`)
-    .limit(1);
+    .where(eq(adsCampaigns.status, "active"));
 
-  if (!campaña) return NextResponse.json({ ok: true, message: "No hay campañas activas para sincronizar" });
+  if (campañasActivas.length === 0) {
+    return NextResponse.json({ ok: true, message: "No hay campañas activas para sincronizar" });
+  }
+
+  campañasActivas.sort((a, b) => {
+    const at = a.itemsLastSyncedAt ? new Date(a.itemsLastSyncedAt).getTime() : -Infinity;
+    const bt = b.itemsLastSyncedAt ? new Date(b.itemsLastSyncedAt).getTime() : -Infinity;
+    return at - bt;
+  });
+  const campaña = campañasActivas[0];
 
   const [tenant] = await db.select().from(tenants).where(eq(tenants.id, campaña.tenantId));
   if (!tenant) return NextResponse.json({ ok: false, error: "Tenant no encontrado" });
@@ -138,7 +157,7 @@ export async function GET(req: NextRequest) {
   await db
     .update(adsCampaigns)
     .set({ itemsLastSyncedAt: new Date() })
-    .where(eq(adsCampaigns.id, campaña.id));
+    .where(and(eq(adsCampaigns.tenantId, campaña.tenantId), eq(adsCampaigns.campaignId, campaña.campaignId)));
 
   return NextResponse.json({ ok: true, campaña: campaña.name, itemsSincronizados: procesados });
 }
