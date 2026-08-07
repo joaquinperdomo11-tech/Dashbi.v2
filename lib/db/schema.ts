@@ -166,3 +166,94 @@ export const visitasDiarias = pgTable("visitas_diarias", {
 }, (table) => ({
   tenantFechaUnique: uniqueIndex("tenant_fecha_unique").on(table.tenantId, table.fecha),
 }));
+
+// ─────────────────────────────────────────────────────────────────
+// Mercado Ads (Product Ads) — agregado para el analista de campañas
+// ─────────────────────────────────────────────────────────────────
+
+// advertiser_id/site_id de Product Ads por tenant (se resuelve una vez y
+// se cachea, para no repetir el llamado a /advertising/advertisers cada vez)
+export const adsAdvertisers = pgTable("ads_advertisers", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
+  advertiserId: text("advertiser_id").notNull(),
+  siteId: text("site_id").notNull(),
+  advertiserName: text("advertiser_name"),
+  productAdsEnabled: boolean("product_ads_enabled").default(true),
+  lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  tenantAdvertiserUnique: uniqueIndex("tenant_advertiser_unique").on(table.tenantId),
+}));
+
+// Campañas de Product Ads: metadata + últimas métricas conocidas de 7 días
+export const adsCampaigns = pgTable("ads_campaigns", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
+  campaignId: text("campaign_id").notNull(),
+  name: text("name").notNull(),
+  status: text("status").notNull(),
+  strategy: text("strategy"),
+  acosTarget: numeric("acos_target"),
+  roasTarget: numeric("roas_target"),
+  budget: numeric("budget"),
+  automaticBudget: boolean("automatic_budget").default(false),
+  clicks: integer("clicks").default(0),
+  prints: integer("prints").default(0),
+  cost: numeric("cost").default("0"),
+  cpc: numeric("cpc").default("0"),
+  ctr: numeric("ctr").default("0"),
+  directAmount: numeric("direct_amount").default("0"),
+  indirectAmount: numeric("indirect_amount").default("0"),
+  totalAmount: numeric("total_amount").default("0"),
+  unitsQuantity: integer("units_quantity").default(0),
+  acos: numeric("acos").default("0"),
+  cvr: numeric("cvr").default("0"),
+  roas: numeric("roas").default("0"),
+  itemsLastSyncedAt: timestamp("items_last_synced_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  tenantCampaignUnique: uniqueIndex("tenant_campaign_unique").on(table.tenantId, table.campaignId),
+}));
+
+// Última foto conocida de cada anuncio (item) dentro de una campaña, con
+// métricas de los últimos 7 días. Se pisa en cada sync — no es histórico
+// día a día, alcanza para el análisis semanal.
+export const adsItemsSnapshot = pgTable("ads_items_snapshot", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
+  campaignId: text("campaign_id").notNull(),
+  itemId: text("item_id").notNull(),
+  title: text("title"),
+  price: numeric("price"),
+  status: text("status"),
+  clicks: integer("clicks").default(0),
+  prints: integer("prints").default(0),
+  cost: numeric("cost").default("0"),
+  cpc: numeric("cpc").default("0"),
+  ctr: numeric("ctr").default("0"),
+  directAmount: numeric("direct_amount").default("0"),
+  indirectAmount: numeric("indirect_amount").default("0"),
+  totalAmount: numeric("total_amount").default("0"),
+  unitsQuantity: integer("units_quantity").default(0),
+  acos: numeric("acos").default("0"),
+  cvr: numeric("cvr").default("0"),
+  roas: numeric("roas").default("0"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  tenantItemAdsUnique: uniqueIndex("tenant_item_ads_unique").on(table.tenantId, table.itemId),
+}));
+
+// Recomendaciones generadas semanalmente (solo lectura para el usuario)
+export const adsRecomendaciones = pgTable("ads_recomendaciones", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
+  weekStart: text("week_start").notNull(), // YYYY-MM-DD, mismo criterio que visitasDiarias.fecha
+  tipo: text("tipo").notNull(), // 'item' | 'campania' | 'cuenta'
+  prioridad: text("prioridad").notNull(), // 'alta' | 'media' | 'baja'
+  itemId: text("item_id"),
+  campaignId: text("campaign_id"),
+  titulo: text("titulo").notNull(),
+  descripcion: text("descripcion").notNull(),
+  accionSugerida: text("accion_sugerida").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
