@@ -267,8 +267,8 @@ export async function GET() {
     } catch (e) {
       result.itemsSearchWithCampaignError = String(e);
     }
-    // 8. Variantes rápidas para aislar la causa del 400: (a) sin el
-    // parámetro metrics, (b) con Api-Version 1 en vez de 2.
+    // 8. Variantes rápidas para aislar la causa del 400 en el endpoint viejo
+    // (que en realidad no existe con ese nombre — ver punto 9).
     const itemsNoMetricsUrl =
       `https://api.mercadolibre.com/marketplace/advertising/${siteId}/advertisers/${advertiserId}/product_ads/items` +
       `?limit=10&offset=0&filters[campaign_id]=${primerCampaignId}`;
@@ -292,6 +292,40 @@ export async function GET() {
       result.itemsApiV1Data = await r.json().catch(() => null);
     } catch (e) {
       result.itemsApiV1Error = String(e);
+    }
+
+    // 9. El recurso correcto NO se llama "items", se llama "ads":
+    // /marketplace/advertising/{site_id}/advertisers/{advertiser_id}/product_ads/ads/search
+    const adsSearchUrl =
+      `https://api.mercadolibre.com/marketplace/advertising/${siteId}/advertisers/${advertiserId}/product_ads/ads/search` +
+      `?limit=10&offset=0&date_from=${fmt(hace7)}&date_to=${fmt(hoy)}&metrics=${metrics}` +
+      `&filters[campaign_id]=${primerCampaignId}`;
+    try {
+      const r = await fetch(adsSearchUrl, {
+        headers: { Authorization: `Bearer ${accessToken}`, "Api-Version": "2" },
+      });
+      result.adsSearchUrl = adsSearchUrl;
+      result.adsSearchStatus = r.status;
+      result.adsSearchData = await r.json().catch(() => null);
+    } catch (e) {
+      result.adsSearchError = String(e);
+    }
+
+    // 10. Misma ruta "ads/search" pero sin filtro de campaña, para ver si
+    // trae TODOS los anuncios de la cuenta con su campaign_id incluido
+    // (más útil para el cron, evita 1 llamado por campaña).
+    const adsSearchAllUrl =
+      `https://api.mercadolibre.com/marketplace/advertising/${siteId}/advertisers/${advertiserId}/product_ads/ads/search` +
+      `?limit=20&offset=0&date_from=${fmt(hace7)}&date_to=${fmt(hoy)}&metrics=${metrics}`;
+    try {
+      const r = await fetch(adsSearchAllUrl, {
+        headers: { Authorization: `Bearer ${accessToken}`, "Api-Version": "2" },
+      });
+      result.adsSearchAllUrl = adsSearchAllUrl;
+      result.adsSearchAllStatus = r.status;
+      result.adsSearchAllData = await r.json().catch(() => null);
+    } catch (e) {
+      result.adsSearchAllError = String(e);
     }
   } else {
     result.itemsWithCampaignSkipped = "No se encontró un campaign_id para probar el filtro.";
