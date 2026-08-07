@@ -227,5 +227,49 @@ export async function GET() {
     result.itemsNoSearchError = String(e);
   }
 
+  // 6. El intento anterior (sin /search) dio 400 Bad Request en vez de 404 —
+  // la ruta existe pero falta algo. Los ítems viven dentro de una campaña,
+  // así que probamos agregando el filtro campaign_id de la primera campaña
+  // encontrada (formato ?filters[campaign_id]=... según la doc de filtros).
+  const primerCampaignId = (
+    result.campaignsByCampaignData as { results?: { id?: number }[] } | undefined
+  )?.results?.[0]?.id;
+
+  if (primerCampaignId) {
+    const itemsWithCampaignUrl =
+      `https://api.mercadolibre.com/marketplace/advertising/${siteId}/advertisers/${advertiserId}/product_ads/items` +
+      `?limit=10&offset=0&date_from=${fmt(hace7)}&date_to=${fmt(hoy)}&metrics=${metrics}` +
+      `&filters[campaign_id]=${primerCampaignId}`;
+    try {
+      const r = await fetch(itemsWithCampaignUrl, {
+        headers: { Authorization: `Bearer ${accessToken}`, "Api-Version": "2" },
+      });
+      result.itemsWithCampaignUrl = itemsWithCampaignUrl;
+      result.itemsWithCampaignStatus = r.status;
+      result.itemsWithCampaignData = await r.json().catch(() => null);
+    } catch (e) {
+      result.itemsWithCampaignError = String(e);
+    }
+
+    // 7. Misma idea pero con /search al final, por si la ruta con filtro
+    // de campaña sí requiere /search (a diferencia de la ruta plana).
+    const itemsSearchWithCampaignUrl =
+      `https://api.mercadolibre.com/marketplace/advertising/${siteId}/advertisers/${advertiserId}/product_ads/items/search` +
+      `?limit=10&offset=0&date_from=${fmt(hace7)}&date_to=${fmt(hoy)}&metrics=${metrics}` +
+      `&filters[campaign_id]=${primerCampaignId}`;
+    try {
+      const r = await fetch(itemsSearchWithCampaignUrl, {
+        headers: { Authorization: `Bearer ${accessToken}`, "Api-Version": "2" },
+      });
+      result.itemsSearchWithCampaignUrl = itemsSearchWithCampaignUrl;
+      result.itemsSearchWithCampaignStatus = r.status;
+      result.itemsSearchWithCampaignData = await r.json().catch(() => null);
+    } catch (e) {
+      result.itemsSearchWithCampaignError = String(e);
+    }
+  } else {
+    result.itemsWithCampaignSkipped = "No se encontró un campaign_id para probar el filtro.";
+  }
+
   return NextResponse.json(result);
 }
