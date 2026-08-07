@@ -267,6 +267,32 @@ export async function GET() {
     } catch (e) {
       result.itemsSearchWithCampaignError = String(e);
     }
+    // 8. Variantes rápidas para aislar la causa del 400: (a) sin el
+    // parámetro metrics, (b) con Api-Version 1 en vez de 2.
+    const itemsNoMetricsUrl =
+      `https://api.mercadolibre.com/marketplace/advertising/${siteId}/advertisers/${advertiserId}/product_ads/items` +
+      `?limit=10&offset=0&filters[campaign_id]=${primerCampaignId}`;
+    try {
+      const r = await fetch(itemsNoMetricsUrl, {
+        headers: { Authorization: `Bearer ${accessToken}`, "Api-Version": "2" },
+      });
+      result.itemsNoMetricsUrl = itemsNoMetricsUrl;
+      result.itemsNoMetricsStatus = r.status;
+      result.itemsNoMetricsData = await r.json().catch(() => null);
+    } catch (e) {
+      result.itemsNoMetricsError = String(e);
+    }
+
+    try {
+      const r = await fetch(itemsWithCampaignUrl, {
+        headers: { Authorization: `Bearer ${accessToken}`, "Api-Version": "1" },
+      });
+      result.itemsApiV1Url = itemsWithCampaignUrl;
+      result.itemsApiV1Status = r.status;
+      result.itemsApiV1Data = await r.json().catch(() => null);
+    } catch (e) {
+      result.itemsApiV1Error = String(e);
+    }
   } else {
     result.itemsWithCampaignSkipped = "No se encontró un campaign_id para probar el filtro.";
   }
