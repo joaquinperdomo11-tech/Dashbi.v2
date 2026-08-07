@@ -7,7 +7,8 @@ const NAV_ITEMS = [
   { href: "/dashboard", label: "Resumen", icon: "📊", section: "Menú principal" },
   { href: "/ordenes",   label: "Órdenes", icon: "📋", section: "Menú principal" },
   { href: "/preguntas", label: "Preguntas", icon: "💬", section: "Menú principal" },
-  { href: "/productos", label: "Productos", icon: "📦", section: "Finanzas" },
+  { href: "/productos", label: "Productos", icon: "📦", section: "Menú principal" },
+  { href: "/publicidad", label: "Publicidad", icon: "📢", section: "Menú principal" },
 ];
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
