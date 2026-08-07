@@ -105,14 +105,19 @@ export async function GET() {
   }
 
   const advertiserId = advertisersData?.advertisers?.[0]?.advertiser_id;
-  if (!advertiserId) {
+  const siteId = advertisersData?.advertisers?.[0]?.site_id;
+  if (!advertiserId || !siteId) {
     result.diagnostico =
-      "No se encontró advertiser_id en la respuesta — revisar advertisersData completo.";
+      "No se encontró advertiser_id o site_id en la respuesta — revisar advertisersData completo.";
     return NextResponse.json(result);
   }
   result.advertiserId = advertiserId;
+  result.siteId = siteId;
 
   // 2. Muestra chica de campañas + métricas de los últimos 7 días.
+  // NOTA: ML migró este endpoint — ahora vive bajo /marketplace/advertising/{site_id}/...
+  // y requiere /search al final. La ruta vieja (/advertising/advertisers/{id}/product_ads/campaigns)
+  // devuelve 404 aunque el advertiser exista.
   const hoy = new Date();
   const hace7 = new Date(hoy.getTime() - 7 * 86400000);
   const fmt = (d: Date) => d.toISOString().slice(0, 10); // YYYY-MM-DD, formato que espera ML
@@ -133,7 +138,7 @@ export async function GET() {
   ].join(",");
 
   const campaignsUrl =
-    `https://api.mercadolibre.com/advertising/advertisers/${advertiserId}/product_ads/campaigns` +
+    `https://api.mercadolibre.com/marketplace/advertising/${siteId}/advertisers/${advertiserId}/product_ads/campaigns/search` +
     `?limit=5&offset=0&date_from=${fmt(hace7)}&date_to=${fmt(hoy)}&metrics=${metrics}&aggregation_type=DAILY`;
 
   let campaignsRes: Response;
@@ -152,6 +157,27 @@ export async function GET() {
   result.campaignsUrl = campaignsUrl;
   result.campaignsStatus = campaignsRes.status;
   result.campaignsData = await campaignsRes.json().catch(() => null);
+
+  // 3. Si la muestra con métricas + fechas falla, reintentar sin esos params
+  // para aislar si el problema es el endpoint en sí o algún parámetro puntual.
+  if (!campaignsRes.ok) {
+    const fallbackUrl =
+      `https://api.mercadolibre.com/marketplace/advertising/${siteId}/advertisers/${advertiserId}/product_ads/campaigns/search` +
+      `?limit=5&offset=0`;
+    try {
+      const fallbackRes = await fetch(fallbackUrl, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Api-Version": "2",
+        },
+      });
+      result.fallbackUrl = fallbackUrl;
+      result.fallbackStatus = fallbackRes.status;
+      result.fallbackData = await fallbackRes.json().catch(() => null);
+    } catch (e) {
+      result.fallbackError = String(e);
+    }
+  }
 
   return NextResponse.json(result);
 }
