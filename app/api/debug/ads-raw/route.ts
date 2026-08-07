@@ -194,20 +194,37 @@ export async function GET() {
   }
 
   // 5. Endpoint de ítems/anuncios — para el desglose por producto/SKU,
-  // clave para cruzar con margen real. Probamos la ruta migrada equivalente
-  // a la de campañas (con /search bajo /marketplace/advertising/{site_id}/...).
-  const itemsUrl =
-    `https://api.mercadolibre.com/marketplace/advertising/${siteId}/advertisers/${advertiserId}/product_ads/items/search` +
+  // clave para cruzar con margen real. El intento anterior con
+  // /marketplace/advertising/{site}/advertisers/{id}/product_ads/items/search
+  // dio 404 "No static resource" (ruta inexistente, no es problema de permisos),
+  // así que probamos 2 variantes más: la ruta vieja sin /marketplace, y la
+  // ruta nueva sin el /search final.
+  const itemsUrlOld =
+    `https://api.mercadolibre.com/advertising/advertisers/${advertiserId}/product_ads/items` +
     `?limit=10&offset=0&date_from=${fmt(hace7)}&date_to=${fmt(hoy)}&metrics=${metrics}`;
   try {
-    const r = await fetch(itemsUrl, {
+    const r = await fetch(itemsUrlOld, {
       headers: { Authorization: `Bearer ${accessToken}`, "Api-Version": "2" },
     });
-    result.itemsUrl = itemsUrl;
-    result.itemsStatus = r.status;
-    result.itemsData = await r.json().catch(() => null);
+    result.itemsOldUrl = itemsUrlOld;
+    result.itemsOldStatus = r.status;
+    result.itemsOldData = await r.json().catch(() => null);
   } catch (e) {
-    result.itemsError = String(e);
+    result.itemsOldError = String(e);
+  }
+
+  const itemsUrlNoSearch =
+    `https://api.mercadolibre.com/marketplace/advertising/${siteId}/advertisers/${advertiserId}/product_ads/items` +
+    `?limit=10&offset=0&date_from=${fmt(hace7)}&date_to=${fmt(hoy)}&metrics=${metrics}`;
+  try {
+    const r = await fetch(itemsUrlNoSearch, {
+      headers: { Authorization: `Bearer ${accessToken}`, "Api-Version": "2" },
+    });
+    result.itemsNoSearchUrl = itemsUrlNoSearch;
+    result.itemsNoSearchStatus = r.status;
+    result.itemsNoSearchData = await r.json().catch(() => null);
+  } catch (e) {
+    result.itemsNoSearchError = String(e);
   }
 
   return NextResponse.json(result);
