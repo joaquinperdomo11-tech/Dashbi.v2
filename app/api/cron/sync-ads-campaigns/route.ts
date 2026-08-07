@@ -39,9 +39,78 @@ const METRICS = [
   "total_amount",
 ].join(",");
 
-// Rotación por tenant (1 por invocación), mismo patrón que sync-reputacion /
-// sync-visitas — evita loops largos y timeouts, sin importar cuántos
-// tenants haya. Corre 1 vez por día vía cron-job.org.
+async function syncTenant(tenant: typeof tenants.$inferSelect): Promise<{ tenantId: string; campañas: number } | null> {
+  const [token] = await db.select().from(mlTokens).where(eq(mlTokens.tenantId, tenant.id));
+  if (!token) return null;
+
+  const accessToken = await getAccessToken(tenant, token);
+  if (!accessToken) return null;
+
+  const advertiser = await resolverAdvertiser(tenant.id, accessToken);
+  if (!advertiser) return { tenantId: tenant.id, campañas: 0 };
+
+  const hoy = new Date();
+  const hace7 = new Date(hoy.getTime() - 7 * 86400000);
+  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+
+  const url =
+    `https://api.mercadolibre.com/marketplace/advertising/${advertiser.siteId}/advertisers/${advertiser.advertiserId}/product_ads/campaigns/search` +
+    `?limit=50&offset=0&date_from=${fmt(hace7)}&date_to=${fmt(hoy)}&metrics=${METRICS}&aggregation_type=CAMPAIGN`;
+
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}`, "Api-Version": "2" },
+  });
+  if (!res.ok) return { tenantId: tenant.id, campañas: 0 };
+
+  const data = await res.json().catch(() => null);
+  const results: Array<Record<string, unknown>> = data?.results ?? [];
+
+  for (const c of results) {
+    const metrics = (c.metrics as Record<string, number>) ?? {};
+    const values = {
+      tenantId: tenant.id,
+      campaignId: String(c.id),
+      name: String(c.name ?? ""),
+      status: String(c.status ?? ""),
+      strategy: c.strategy ? String(c.strategy) : null,
+      acosTarget: c.acos_target !== undefined ? String(c.acos_target) : null,
+      roasTarget: c.roas_target !== undefined ? String(c.roas_target) : null,
+      budget: c.budget !== undefined ? String(c.budget) : null,
+      automaticBudget: Boolean(c.automatic_budget),
+      clicks: metrics.clicks ?? 0,
+      prints: metrics.prints ?? 0,
+      cost: String(metrics.cost ?? 0),
+      cpc: String(metrics.cpc ?? 0),
+      ctr: String(metrics.ctr ?? 0),
+      directAmount: String(metrics.direct_amount ?? 0),
+      indirectAmount: String(metrics.indirect_amount ?? 0),
+      totalAmount: String(metrics.total_amount ?? 0),
+      unitsQuantity: metrics.units_quantity ?? 0,
+      acos: String(metrics.acos ?? 0),
+      cvr: String(metrics.cvr ?? 0),
+      roas: String(metrics.roas ?? 0),
+      updatedAt: new Date(),
+    };
+
+    await db
+      .insert(adsCampaigns)
+      .values(values)
+      .onConflictDoUpdate({
+        target: [adsCampaigns.tenantId, adsCampaigns.campaignId],
+        set: values,
+      });
+  }
+
+  return { tenantId: tenant.id, campañas: results.length };
+}
+
+// Procesa TODOS los tenants elegibles en cada corrida — a diferencia de
+// sync-publicaciones (que itera cientos de productos), acá es 1 sola
+// llamada liviana a ML por tenant, así que rotar de a 1 por día era
+// innecesariamente lento (con pocos tenants tardaba días en cubrirlos a
+// todos). Si en el futuro hay decenas/cientos de tenants activos, esto se
+// puede volver a convertir en rotación — por ahora no hace falta.
+// Corre 1 vez por día vía cron-job.org.
 export async function GET(req: NextRequest) {
   const authHeader = req.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
@@ -55,91 +124,15 @@ export async function GET(req: NextRequest) {
   const eligible = activeTenants.filter((t) => t.mlUserId);
   if (eligible.length === 0) return NextResponse.json({ ok: true, message: "No tenants" });
 
-  const daySlot = Math.floor(Date.now() / 86400000);
-  const tenant = eligible[daySlot % eligible.length];
-
-  const [token] = await db.select().from(mlTokens).where(eq(mlTokens.tenantId, tenant.id));
-  if (!token) return NextResponse.json({ ok: true, message: "No token" });
-
-  const accessToken = await getAccessToken(tenant, token);
-  if (!accessToken) return NextResponse.json({ ok: false, error: "refresh_failed" });
-
-  const advertiser = await resolverAdvertiser(tenant.id, accessToken);
-  if (!advertiser) {
-    return NextResponse.json({ ok: true, message: "Product Ads no habilitado o error al resolver advertiser" });
+  const resultados = [];
+  for (const tenant of eligible) {
+    try {
+      const r = await syncTenant(tenant);
+      if (r) resultados.push(r);
+    } catch (e) {
+      resultados.push({ tenantId: tenant.id, error: String(e) });
+    }
   }
 
-  const hoy = new Date();
-  const hace7 = new Date(hoy.getTime() - 7 * 86400000);
-  const fmt = (d: Date) => d.toISOString().slice(0, 10);
-
-  const url =
-    `https://api.mercadolibre.com/marketplace/advertising/${advertiser.siteId}/advertisers/${advertiser.advertiserId}/product_ads/campaigns/search` +
-    `?limit=50&offset=0&date_from=${fmt(hace7)}&date_to=${fmt(hoy)}&metrics=${METRICS}&aggregation_type=CAMPAIGN`;
-
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${accessToken}`, "Api-Version": "2" },
-  });
-  if (!res.ok) {
-    return NextResponse.json({ ok: false, error: `ML respondió ${res.status}` });
-  }
-  const data = await res.json().catch(() => null);
-  const results: Array<Record<string, unknown>> = data?.results ?? [];
-
-  for (const c of results) {
-    const metrics = (c.metrics as Record<string, number>) ?? {};
-    await db
-      .insert(adsCampaigns)
-      .values({
-        tenantId: tenant.id,
-        campaignId: String(c.id),
-        name: String(c.name ?? ""),
-        status: String(c.status ?? ""),
-        strategy: c.strategy ? String(c.strategy) : null,
-        acosTarget: c.acos_target !== undefined ? String(c.acos_target) : null,
-        roasTarget: c.roas_target !== undefined ? String(c.roas_target) : null,
-        budget: c.budget !== undefined ? String(c.budget) : null,
-        automaticBudget: Boolean(c.automatic_budget),
-        clicks: metrics.clicks ?? 0,
-        prints: metrics.prints ?? 0,
-        cost: String(metrics.cost ?? 0),
-        cpc: String(metrics.cpc ?? 0),
-        ctr: String(metrics.ctr ?? 0),
-        directAmount: String(metrics.direct_amount ?? 0),
-        indirectAmount: String(metrics.indirect_amount ?? 0),
-        totalAmount: String(metrics.total_amount ?? 0),
-        unitsQuantity: metrics.units_quantity ?? 0,
-        acos: String(metrics.acos ?? 0),
-        cvr: String(metrics.cvr ?? 0),
-        roas: String(metrics.roas ?? 0),
-        updatedAt: new Date(),
-      })
-      .onConflictDoUpdate({
-        target: [adsCampaigns.tenantId, adsCampaigns.campaignId],
-        set: {
-          name: String(c.name ?? ""),
-          status: String(c.status ?? ""),
-          strategy: c.strategy ? String(c.strategy) : null,
-          acosTarget: c.acos_target !== undefined ? String(c.acos_target) : null,
-          roasTarget: c.roas_target !== undefined ? String(c.roas_target) : null,
-          budget: c.budget !== undefined ? String(c.budget) : null,
-          automaticBudget: Boolean(c.automatic_budget),
-          clicks: metrics.clicks ?? 0,
-          prints: metrics.prints ?? 0,
-          cost: String(metrics.cost ?? 0),
-          cpc: String(metrics.cpc ?? 0),
-          ctr: String(metrics.ctr ?? 0),
-          directAmount: String(metrics.direct_amount ?? 0),
-          indirectAmount: String(metrics.indirect_amount ?? 0),
-          totalAmount: String(metrics.total_amount ?? 0),
-          unitsQuantity: metrics.units_quantity ?? 0,
-          acos: String(metrics.acos ?? 0),
-          cvr: String(metrics.cvr ?? 0),
-          roas: String(metrics.roas ?? 0),
-          updatedAt: new Date(),
-        },
-      });
-  }
-
-  return NextResponse.json({ ok: true, tenant: tenant.id, campañas: results.length });
+  return NextResponse.json({ ok: true, tenantsProcesados: resultados.length, resultados });
 }

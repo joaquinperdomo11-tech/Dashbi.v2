@@ -21,29 +21,10 @@ function inicioSemana(): string {
   return monday.toISOString().slice(0, 10);
 }
 
-// Corre 1 vez por semana vía cron-job.org (ej. lunes a la madrugada).
-// Rota 1 tenant por invocación para no acumular muchos llamados a Gemini en
-// un solo request — si se necesita para todos los tenants el mismo día, se
-// puede llamar varias veces seguidas desde cron-job.org o ajustar el
-// scheduler para llamar N veces esa madrugada.
-export async function GET(req: NextRequest) {
-  const authHeader = req.headers.get("authorization");
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const activeTenants = await db
-    .select()
-    .from(tenants)
-    .where(or(eq(tenants.status, "trial"), eq(tenants.status, "active")));
-  const eligible = activeTenants.filter((t) => t.mlUserId);
-  if (eligible.length === 0) return NextResponse.json({ ok: true, message: "No tenants" });
-
-  const hourSlot = Math.floor(Date.now() / 3600000);
-  const tenant = eligible[hourSlot % eligible.length];
-
-  const weekStart = inicioSemana();
-
+async function procesarTenant(
+  tenant: typeof tenants.$inferSelect,
+  weekStart: string
+): Promise<{ tenantId: string; candidatos: number; recomendaciones: number } | { tenantId: string; skipped: string }> {
   const [camps, items, pubs, costosRows] = await Promise.all([
     db.select().from(adsCampaigns).where(eq(adsCampaigns.tenantId, tenant.id)),
     db.select().from(adsItemsSnapshot).where(eq(adsItemsSnapshot.tenantId, tenant.id)),
@@ -52,7 +33,7 @@ export async function GET(req: NextRequest) {
   ]);
 
   if (camps.length === 0) {
-    return NextResponse.json({ ok: true, message: "Sin campañas de Ads sincronizadas todavía para este tenant" });
+    return { tenantId: tenant.id, skipped: "sin campañas de Ads sincronizadas todavía" };
   }
 
   const campaignInfos: CampaignInfo[] = camps.map((c) => ({
@@ -92,12 +73,7 @@ export async function GET(req: NextRequest) {
 
   const candidatos = construirCandidatos(itemSnapshots, campaignInfos, pubsMin, costosMap);
 
-  let recomendaciones: Awaited<ReturnType<typeof generarRecomendaciones>> = [];
-  try {
-    recomendaciones = await generarRecomendaciones(candidatos, tenant.nombre || tenant.email || "tu tienda");
-  } catch (e) {
-    return NextResponse.json({ ok: false, error: "gemini_failed", detail: String(e) });
-  }
+  const recomendaciones = await generarRecomendaciones(candidatos, tenant.nombre || tenant.email || "tu tienda");
 
   if (recomendaciones.length > 0) {
     await db.insert(adsRecomendaciones).values(
@@ -115,10 +91,40 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  return NextResponse.json({
-    ok: true,
-    tenant: tenant.id,
-    candidatosDetectados: candidatos.length,
-    recomendacionesGeneradas: recomendaciones.length,
-  });
+  return { tenantId: tenant.id, candidatos: candidatos.length, recomendaciones: recomendaciones.length };
+}
+
+// Procesa TODOS los tenants elegibles en cada corrida — con pocos tenants,
+// rotar 1 por hora significaba tardar semanas en cubrirlos a todos una vez
+// (esto corre 1 vez por semana). El costo por tenant es 1 solo llamado a
+// Gemini, así que hacerlos todos seguidos en la misma invocación es liviano.
+// Si en el futuro hay muchísimos tenants, esto se puede volver a convertir
+// en rotación o batching — por ahora no hace falta.
+// Corre 1 vez por semana vía cron-job.org (ej. lunes a la madrugada).
+export async function GET(req: NextRequest) {
+  const authHeader = req.headers.get("authorization");
+  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const activeTenants = await db
+    .select()
+    .from(tenants)
+    .where(or(eq(tenants.status, "trial"), eq(tenants.status, "active")));
+  const eligible = activeTenants.filter((t) => t.mlUserId);
+  if (eligible.length === 0) return NextResponse.json({ ok: true, message: "No tenants" });
+
+  const weekStart = inicioSemana();
+  const resultados = [];
+
+  for (const tenant of eligible) {
+    try {
+      const r = await procesarTenant(tenant, weekStart);
+      resultados.push(r);
+    } catch (e) {
+      resultados.push({ tenantId: tenant.id, error: String(e) });
+    }
+  }
+
+  return NextResponse.json({ ok: true, tenantsProcesados: resultados.length, resultados });
 }
